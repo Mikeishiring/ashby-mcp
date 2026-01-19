@@ -31,6 +31,21 @@ async function main(): Promise<void> {
   const ashby = new AshbyService(config);
   console.log("Ashby service initialized");
 
+  // Log API key presence (not the actual key for security)
+  const ashbyKeyLength = config.ashby.apiKey.length;
+  const ashbyKeyPrefix = config.ashby.apiKey.substring(0, 8);
+  console.log(`Ashby API key: ${ashbyKeyPrefix}... (${ashbyKeyLength} chars)`);
+
+  // Test Ashby connectivity on startup
+  try {
+    console.log("Testing Ashby API connectivity...");
+    const jobs = await ashby.getOpenJobs();
+    console.log(`✅ Ashby API connected! Found ${jobs.length} open jobs.`);
+  } catch (error) {
+    console.error("⚠️ Ashby API connectivity test failed:", error);
+    console.error("The bot will still start, but Ashby operations may fail.");
+  }
+
   // Initialize safety components
   const confirmations = new ConfirmationManager(config.safety.confirmationTimeoutMs);
   const safety = new SafetyGuards(config, ashby);
