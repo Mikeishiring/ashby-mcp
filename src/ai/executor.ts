@@ -19,6 +19,11 @@ interface ToolInput {
   name_or_email?: string;
   content?: string;
   target_stage?: string;
+  start_time?: string;
+  end_time?: string;
+  interviewer_ids?: string[];
+  meeting_link?: string;
+  location?: string;
 }
 
 export class ToolExecutor {
@@ -42,8 +47,15 @@ export class ToolExecutor {
           };
         }
 
+        const operationType =
+          toolName === "add_note"
+            ? "add_note"
+            : toolName === "schedule_interview"
+              ? "add_note" // Treat scheduling like add_note for safety purposes
+              : "move_stage";
+
         const check = await this.safety.checkWriteOperation({
-          type: toolName === "add_note" ? "add_note" : "move_stage",
+          type: operationType,
           candidateIds: [candidateId],
         });
 
@@ -114,6 +126,32 @@ export class ToolExecutor {
           data: {
             application: result,
             message: `Candidate moved to ${stage.title}.`,
+          },
+        };
+      }
+
+      if (toolName === "schedule_interview") {
+        if (!input.start_time || !input.end_time || !input.interviewer_ids) {
+          return {
+            success: false,
+            error: "Missing required fields: start_time, end_time, interviewer_ids",
+          };
+        }
+
+        const schedule = await this.ashby.scheduleInterview(
+          candidateId,
+          input.start_time,
+          input.end_time,
+          input.interviewer_ids,
+          input.meeting_link,
+          input.location
+        );
+
+        return {
+          success: true,
+          data: {
+            schedule,
+            message: `Interview scheduled successfully.`,
           },
         };
       }
@@ -210,6 +248,25 @@ export class ToolExecutor {
         }
         const { job, candidates } = await this.ashby.getJobWithCandidates(jobId);
         return { success: true, data: { job, candidates } };
+      }
+
+      case "list_interview_plans": {
+        const plans = await this.ashby.listInterviewPlans();
+        return { success: true, data: plans };
+      }
+
+      case "get_interview_schedules": {
+        const candidateId = await this.resolveCandidateId(input);
+        if (!candidateId) {
+          return {
+            success: false,
+            error: "Could not identify candidate. Please provide a name, email, or candidate ID.",
+          };
+        }
+        const schedules = await this.ashby.getInterviewSchedulesForCandidate(
+          candidateId
+        );
+        return { success: true, data: schedules };
       }
 
       default:

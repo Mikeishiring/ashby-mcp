@@ -158,6 +158,79 @@ export const ashbyTools: Tool[] = [
   },
 
   // ===========================================================================
+  // Interview & Scheduling Tools
+  // ===========================================================================
+  {
+    name: "list_interview_plans",
+    description:
+      "List all interview plans in the organization. Shows the interview stages for each plan.",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: "get_interview_schedules",
+    description:
+      "Get interview schedules for a candidate. Shows upcoming and past interviews.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        candidate_id: {
+          type: "string",
+          description: "The candidate ID",
+        },
+        name_or_email: {
+          type: "string",
+          description: "Name or email to find the candidate (if candidate_id not known)",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "schedule_interview",
+    description:
+      "Create an interview schedule for a candidate. Requires interview start/end times and interviewer user IDs. This action requires confirmation.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        candidate_id: {
+          type: "string",
+          description: "The candidate ID",
+        },
+        name_or_email: {
+          type: "string",
+          description: "Name or email to find the candidate (if candidate_id not known)",
+        },
+        start_time: {
+          type: "string",
+          description: "Interview start time in ISO format (e.g., 2026-01-20T14:00:00Z)",
+        },
+        end_time: {
+          type: "string",
+          description: "Interview end time in ISO format (e.g., 2026-01-20T15:00:00Z)",
+        },
+        interviewer_ids: {
+          type: "array",
+          items: { type: "string" },
+          description: "Array of interviewer user IDs",
+        },
+        meeting_link: {
+          type: "string",
+          description: "Optional meeting link (Zoom, Google Meet, etc.)",
+        },
+        location: {
+          type: "string",
+          description: "Optional physical location",
+        },
+      },
+      required: ["start_time", "end_time", "interviewer_ids"],
+    },
+  },
+
+  // ===========================================================================
   // Write Operation Tools
   // ===========================================================================
   {
@@ -222,9 +295,11 @@ export function getToolNames(category?: "read" | "write"): string[] {
     "get_candidate_details",
     "get_open_jobs",
     "get_job_details",
+    "list_interview_plans",
+    "get_interview_schedules",
   ];
 
-  const writeTools = ["add_note", "move_candidate_stage"];
+  const writeTools = ["add_note", "move_candidate_stage", "schedule_interview"];
 
   if (category === "read") return readTools;
   if (category === "write") return writeTools;

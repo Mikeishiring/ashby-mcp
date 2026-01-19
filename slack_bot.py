@@ -143,6 +143,7 @@ SYSTEM_PROMPT = """You are a terse recruiting assistant. CRITICAL RULES:
 
 YOUR TOOLS (use them!):
 - search_candidates, get_candidate_details, get_candidates_by_job, get_candidates_by_stage, get_candidates_by_source
+- get_candidate_scorecard (USE THIS for interview feedback/scores/ratings - returns formatted summary with 1-4 ratings per stage)
 - move_candidate_stage, add_candidate_note, create_candidate, archive_candidate
 - schedule_interview, reschedule_interview, cancel_interview, get_upcoming_interviews
 - create_offer, get_pending_offers, get_candidate_offer
@@ -726,6 +727,24 @@ TOOLS = [
                 }
             },
             "required": ["report_type"]
+        }
+    },
+    {
+        "name": "get_candidate_scorecard",
+        "description": "Get a formatted interview scorecard summary for a candidate. Shows each interview stage, interviewer, rating (1-4), and recommendation. Use this when asked about interview feedback, scores, or how a candidate did.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "candidate_name": {
+                    "type": "string",
+                    "description": "Candidate name to look up"
+                },
+                "candidate_id": {
+                    "type": "string",
+                    "description": "Candidate ID (alternative to name)"
+                }
+            },
+            "required": []
         }
     }
 ]
@@ -1341,6 +1360,106 @@ def execute_tool(tool_name: str, tool_input: Dict) -> str:
             if not report:
                 return json.dumps({"error": f"Could not generate report of type '{report_type}'"})
             return json.dumps(report, indent=2, default=str)
+
+        elif tool_name == "get_candidate_scorecard":
+            candidate_id = tool_input.get("candidate_id")
+            candidate_name = tool_input.get("candidate_name")
+
+            # Find candidate if only name provided
+            if not candidate_id and candidate_name:
+                apps = ashby.get_active_applications()
+                for app in apps:
+                    if candidate_name.lower() in app.get("candidate", {}).get("name", "").lower():
+                        candidate_id = app.get("candidate", {}).get("id")
+                        candidate_name = app.get("candidate", {}).get("name")
+                        break
+                if not candidate_id:
+                    return json.dumps({"error": f"No candidate found matching '{candidate_name}'"})
+
+            if not candidate_id:
+                return json.dumps({"error": "Either candidate_id or candidate_name is required"})
+
+            # Get full context
+            context = ashby.get_candidate_full_context(candidate_id)
+            candidate_info = context.get("candidate", {})
+            actual_name = candidate_info.get("name", candidate_name or "Unknown")
+
+            # Build scorecard summary
+            scorecard = {
+                "candidate": actual_name,
+                "current_stage": None,
+                "job": None,
+                "interviews": []
+            }
+
+            for app_data in context.get("applications", []):
+                app = app_data.get("application", {})
+                scorecard["current_stage"] = app.get("currentInterviewStage", {}).get("title")
+                scorecard["job"] = app.get("job", {}).get("title")
+
+                # Process feedback/scorecards
+                for fb in app_data.get("feedback", []):
+                    interview_entry = {
+                        "stage": fb.get("interviewStage", {}).get("title", "Unknown Stage"),
+                        "interviewer": fb.get("submittedBy", {}).get("name", "Unknown"),
+                        "submitted_at": fb.get("submittedAt"),
+                        "rating": None,
+                        "overall_rating": None,
+                        "recommendation": None,
+                        "notes_summary": None
+                    }
+
+                    # Extract rating - could be in different places depending on form
+                    # Common fields: overallRating, rating, overallRecommendation
+                    interview_entry["rating"] = fb.get("rating") or fb.get("overallRating")
+                    interview_entry["overall_rating"] = fb.get("overallRating")
+                    interview_entry["recommendation"] = fb.get("overallRecommendation") or fb.get("recommendation")
+
+                    # Check submittedValues for structured feedback
+                    submitted = fb.get("submittedValues", {})
+                    if isinstance(submitted, dict):
+                        # Look for common rating field names
+                        for key in ["overallRating", "rating", "score", "Overall Rating", "Overall Score"]:
+                            if key in submitted and submitted[key]:
+                                interview_entry["rating"] = submitted[key]
+                                break
+                        # Look for recommendation
+                        for key in ["recommendation", "overallRecommendation", "Recommendation", "Hiring Recommendation"]:
+                            if key in submitted and submitted[key]:
+                                interview_entry["recommendation"] = submitted[key]
+                                break
+
+                    # Get notes summary (first 200 chars)
+                    notes = fb.get("notes") or fb.get("submittedValues", {}).get("notes", "")
+                    if notes and isinstance(notes, str):
+                        interview_entry["notes_summary"] = notes[:200] + "..." if len(notes) > 200 else notes
+
+                    scorecard["interviews"].append(interview_entry)
+
+                # Also include scheduled/completed interviews from interview events
+                for interview in app_data.get("interviews", []):
+                    # Check if we already have feedback for this stage
+                    stage_title = interview.get("interviewStage", {}).get("title")
+                    existing = [i for i in scorecard["interviews"] if i.get("stage") == stage_title]
+                    if not existing:
+                        interview_entry = {
+                            "stage": stage_title or "Scheduled Interview",
+                            "interviewer": ", ".join([i.get("name", "") for i in interview.get("interviewers", [])]),
+                            "scheduled_time": interview.get("startTime"),
+                            "status": interview.get("status", "scheduled"),
+                            "rating": None,
+                            "recommendation": None,
+                            "notes_summary": "(No feedback submitted yet)"
+                        }
+                        scorecard["interviews"].append(interview_entry)
+
+            # Sort interviews by date if available
+            scorecard["interviews"].sort(
+                key=lambda x: x.get("submitted_at") or x.get("scheduled_time") or "",
+                reverse=False
+            )
+
+            return json.dumps(scorecard, indent=2, default=str)
 
         else:
             return json.dumps({"error": f"Unknown tool: {tool_name}"})

@@ -248,6 +248,62 @@ export class AshbyService {
   }
 
   // ===========================================================================
+  // Interview Scheduling Operations
+  // ===========================================================================
+
+  async listInterviewPlans() {
+    return this.client.listInterviewPlans();
+  }
+
+  async getInterviewSchedulesForCandidate(candidateId: string) {
+    const { applications } = await this.client.getCandidateWithApplications(
+      candidateId
+    );
+
+    // Get schedules for all applications
+    const schedules = await Promise.all(
+      applications.map((app) => this.client.listInterviewSchedules(app.id))
+    );
+
+    return schedules.flat();
+  }
+
+  async scheduleInterview(
+    candidateId: string,
+    startTime: string,
+    endTime: string,
+    interviewerIds: string[],
+    meetingLink?: string,
+    location?: string
+  ) {
+    const { applications } = await this.client.getCandidateWithApplications(
+      candidateId
+    );
+    const activeApp = applications.find((a) => a.status === "Active");
+
+    if (!activeApp) {
+      throw new Error("No active application found for this candidate");
+    }
+
+    const event: {
+      startTime: string;
+      endTime: string;
+      interviewerIds: string[];
+      location?: string;
+      meetingLink?: string;
+    } = {
+      startTime,
+      endTime,
+      interviewerIds,
+    };
+
+    if (meetingLink) event.meetingLink = meetingLink;
+    if (location) event.location = location;
+
+    return this.client.createInterviewSchedule(activeApp.id, [event]);
+  }
+
+  // ===========================================================================
   // Daily Summary
   // ===========================================================================
 

@@ -11,6 +11,8 @@ import type {
   Application,
   Job,
   InterviewStage,
+  InterviewPlan,
+  InterviewSchedule,
   Note,
   PaginatedResponse,
   ApiResponse,

@@ -19,15 +19,16 @@ A Slack bot that provides natural language access to Ashby ATS using Claude AI.
 
 - **@mention interaction** - `@AshbyBot who's stale in the pipeline?`
 - **Thread memory** - Remembers context within conversation threads
-- **26 tools** - Full Ashby API coverage (see below)
+- **27 tools** - Full Ashby API coverage (see below)
 - **Write operations with confirmation** - Add notes, move candidates, schedule interviews
 - **Safety controls** - Batch limits, hired candidate protection, confirmation flows
 
-### Available Tools (26 total)
+### Available Tools (27 total)
 
 **Search & Discovery**
 - `search_candidates` - Search by name or email
 - `get_candidate_details` - Full candidate info with history
+- `get_candidate_scorecard` - **Interview scores summary** (stage, interviewer, 1-4 rating, recommendation)
 - `get_candidates_by_job` - All candidates for a specific job
 - `get_candidates_by_stage` - All candidates in a specific stage
 - `get_candidates_by_source` - Filter by application source (LinkedIn, referral, etc.)
