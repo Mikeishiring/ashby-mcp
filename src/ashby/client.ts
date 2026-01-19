@@ -106,13 +106,77 @@ export class AshbyClient {
 
     do {
       const body = { ...params, cursor };
-      const response = await this.request<PaginatedResponse<T>>(endpoint, body);
+      const response = await this.requestPaginated<T>(endpoint, body);
 
       allResults.push(...response.results);
       cursor = response.moreDataAvailable ? response.nextCursor : undefined;
     } while (cursor);
 
     return allResults;
+  }
+
+  /**
+   * Make a paginated request that preserves pagination metadata.
+   * Unlike request<T>, this returns the full paginated response structure.
+   */
+  private async requestPaginated<T>(
+    endpoint: string,
+    body?: Record<string, unknown>
+  ): Promise<PaginatedResponse<T>> {
+    const url = `${this.baseUrl}/${endpoint}`;
+    const auth = Buffer.from(`${this.apiKey}:`).toString("base64");
+
+    console.log(`[Ashby] Requesting ${endpoint}...`);
+
+    const fetchOptions: RequestInit = {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${auth}`,
+        "Content-Type": "application/json",
+      },
+    };
+
+    if (body) {
+      fetchOptions.body = JSON.stringify(body);
+    }
+
+    const response = await fetch(url, fetchOptions);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[Ashby] API error ${response.status}: ${errorText}`);
+      throw new AshbyApiError(
+        `Ashby API error: ${response.status} ${response.statusText}`,
+        response.status,
+        errorText
+      );
+    }
+
+    // For paginated endpoints, the response structure is:
+    // { success: true, results: [...], moreDataAvailable: bool, nextCursor?: string }
+    const data = await response.json() as {
+      success: boolean;
+      results: T[];
+      moreDataAvailable: boolean;
+      nextCursor?: string;
+      errors?: Array<{ message: string }>;
+    };
+
+    if (!data.success) {
+      const errors = data.errors?.map((e) => e.message).join(", ") ?? "Unknown error";
+      console.error(`[Ashby] API returned error: ${errors}`);
+      throw new AshbyApiError(`Ashby API returned error: ${errors}`, 400);
+    }
+
+    console.log(`[Ashby] ${endpoint} succeeded`);
+    const result: PaginatedResponse<T> = {
+      results: data.results,
+      moreDataAvailable: data.moreDataAvailable,
+    };
+    if (data.nextCursor) {
+      result.nextCursor = data.nextCursor;
+    }
+    return result;
   }
 
   private getCached<T>(key: string): T | null {
