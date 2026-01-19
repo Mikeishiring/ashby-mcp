@@ -222,17 +222,26 @@ export class AshbyClient {
     const cached = this.getCached<InterviewStage[]>(cacheKey);
     if (cached) return cached;
 
-    const results = await this.getAllPaginated<InterviewStage>(
-      "interviewStage.list"
-    );
+    // Ashby API doesn't have a global interviewStage.list endpoint.
+    // We extract unique stages from active applications which include currentInterviewStage.
+    const applications = await this.getAllPaginated<Application>("application.list", { status: "Active" });
+
+    const stageMap = new Map<string, InterviewStage>();
+    for (const app of applications) {
+      if (app.currentInterviewStage && !stageMap.has(app.currentInterviewStage.id)) {
+        stageMap.set(app.currentInterviewStage.id, app.currentInterviewStage);
+      }
+    }
+
+    const results = Array.from(stageMap.values());
     this.setCache(cacheKey, results, AshbyClient.CACHE_TTL.stages);
     return results;
   }
 
-  async getInterviewStage(stageId: string): Promise<InterviewStage> {
-    return this.request<InterviewStage>("interviewStage.info", {
-      interviewStageId: stageId,
-    });
+  async getInterviewStage(stageId: string): Promise<InterviewStage | null> {
+    // Get stage from the cached list
+    const stages = await this.listInterviewStages();
+    return stages.find(s => s.id === stageId) ?? null;
   }
 
   // ===========================================================================
