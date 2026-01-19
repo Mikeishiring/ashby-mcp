@@ -183,7 +183,7 @@ export class AshbyClient {
     applicationId: string,
     interviewStageId: string
   ): Promise<Application> {
-    return this.request<Application>("application.move", {
+    return this.request<Application>("application.changeStage", {
       applicationId,
       interviewStageId,
     });
@@ -249,7 +249,7 @@ export class AshbyClient {
   // ===========================================================================
 
   async getCandidateNotes(candidateId: string): Promise<Note[]> {
-    return this.request<Note[]>("note.list", { candidateId });
+    return this.request<Note[]>("candidate.listNotes", { candidateId });
   }
 
   async addNote(
@@ -261,7 +261,7 @@ export class AshbyClient {
     const timestamp = new Date().toISOString();
     const taggedContent = `[via Slack Bot - ${timestamp}]\n\n${content}`;
 
-    return this.request<Note>("note.create", {
+    return this.request<Note>("candidate.createNote", {
       candidateId,
       content: taggedContent,
       visibility,
