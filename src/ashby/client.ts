@@ -51,6 +51,8 @@ export class AshbyClient {
     const url = `${this.baseUrl}/${endpoint}`;
     const auth = Buffer.from(`${this.apiKey}:`).toString("base64");
 
+    console.log(`[Ashby] Requesting ${endpoint}...`);
+
     const fetchOptions: RequestInit = {
       method: "POST",
       headers: {
@@ -63,25 +65,36 @@ export class AshbyClient {
       fetchOptions.body = JSON.stringify(body);
     }
 
-    const response = await fetch(url, fetchOptions);
+    try {
+      const response = await fetch(url, fetchOptions);
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new AshbyApiError(
-        `Ashby API error: ${response.status} ${response.statusText}`,
-        response.status,
-        errorText
-      );
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[Ashby] API error ${response.status}: ${errorText}`);
+        throw new AshbyApiError(
+          `Ashby API error: ${response.status} ${response.statusText}`,
+          response.status,
+          errorText
+        );
+      }
+
+      const data = (await response.json()) as ApiResponse<T>;
+
+      if (!data.success) {
+        const errors = data.errors?.map((e) => e.message).join(", ") ?? "Unknown error";
+        console.error(`[Ashby] API returned error: ${errors}`);
+        throw new AshbyApiError(`Ashby API returned error: ${errors}`, 400);
+      }
+
+      console.log(`[Ashby] ${endpoint} succeeded`);
+      return data.results as T;
+    } catch (error) {
+      if (error instanceof AshbyApiError) {
+        throw error;
+      }
+      console.error(`[Ashby] Network error for ${endpoint}:`, error);
+      throw error;
     }
-
-    const data = (await response.json()) as ApiResponse<T>;
-
-    if (!data.success) {
-      const errors = data.errors?.map((e) => e.message).join(", ") ?? "Unknown error";
-      throw new AshbyApiError(`Ashby API returned error: ${errors}`, 400);
-    }
-
-    return data.results as T;
   }
 
   private async getAllPaginated<T>(
