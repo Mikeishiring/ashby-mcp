@@ -194,7 +194,7 @@ class AshbyClient:
             # In production: Send to a high-speed model with a strict PII prompt
         return redacted
 
-    def _is_hired_globally(self, candidate_id: str) -> bool:
+    def get_candidate_notes(self, candidate_id: str) -> List[Dict]:
         """Get all notes for a candidate."""
         try:
             response = self._post("candidate.listNotes", {"candidateId": candidate_id})
@@ -203,6 +203,17 @@ class AshbyClient:
         except:
             pass
         return []
+
+    def _is_hired_globally(self, candidate_id: str) -> bool:
+        """Check if a candidate has been hired in any application."""
+        try:
+            # Get all applications for this candidate
+            all_apps = self.get_active_applications()
+            candidate_apps = [a for a in all_apps if a.get("candidate", {}).get("id") == candidate_id]
+            return any(self._is_hired(app) for app in candidate_apps)
+        except:
+            pass
+        return False
 
     # ==================== ACTIONS ====================
 
@@ -358,10 +369,20 @@ class AshbyClient:
     # ==================== INTERVIEW STAGES ====================
 
     def get_interview_stages(self, refresh: bool = False) -> List[Dict]:
-        """Get all interview stages."""
+        """Get all interview stages.
+
+        Note: Ashby API's interviewStage.list requires an interviewPlanId parameter.
+        Instead, we extract unique stages from active applications which include
+        currentInterviewStage data.
+        """
         if self._stages_cache is None or refresh:
-            response = self._post("interviewStage.list")
-            self._stages_cache = response.get("results", []) if response.get("success") else []
+            apps = self.get_active_applications()
+            stages_map = {}
+            for app in apps:
+                stage = app.get("currentInterviewStage")
+                if stage and stage.get("id") not in stages_map:
+                    stages_map[stage.get("id")] = stage
+            self._stages_cache = list(stages_map.values())
         return self._stages_cache
 
     def get_stage_by_name(self, stage_name: str) -> Optional[Dict]:
