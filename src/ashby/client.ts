@@ -309,6 +309,50 @@ export class AshbyClient {
   }
 
   // ===========================================================================
+  // Interview Scheduling
+  // ===========================================================================
+
+  async listInterviewPlans(): Promise<InterviewPlan[]> {
+    const cacheKey = "interviewPlans:all";
+    const cached = this.getCached<InterviewPlan[]>(cacheKey);
+    if (cached) return cached;
+
+    const results = await this.request<{ interviewPlans: InterviewPlan[] }>(
+      "interviewPlan.list",
+      { includeArchived: false }
+    );
+    const plans = results.interviewPlans;
+    this.setCache(cacheKey, plans, AshbyClient.CACHE_TTL.stages);
+    return plans;
+  }
+
+  async createInterviewSchedule(
+    applicationId: string,
+    interviewEvents: Array<{
+      startTime: string;
+      endTime: string;
+      interviewerIds: string[];
+      location?: string;
+      meetingLink?: string;
+    }>
+  ): Promise<InterviewSchedule> {
+    return this.request<InterviewSchedule>("interviewSchedule.create", {
+      applicationId,
+      interviewEvents,
+    });
+  }
+
+  async listInterviewSchedules(
+    applicationId?: string
+  ): Promise<InterviewSchedule[]> {
+    const params = applicationId ? { applicationId } : {};
+    return this.getAllPaginated<InterviewSchedule>(
+      "interviewSchedule.list",
+      params
+    );
+  }
+
+  // ===========================================================================
   // Notes
   // ===========================================================================
 

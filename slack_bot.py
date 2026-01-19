@@ -142,13 +142,13 @@ SYSTEM_PROMPT = """You are a terse recruiting assistant. CRITICAL RULES:
 4. If a tool fails, say what failed and offer ONE alternative.
 
 YOUR TOOLS (use them!):
-- search_candidates, get_candidate_details, get_candidates_by_job, get_candidates_by_stage
+- search_candidates, get_candidate_details, get_candidates_by_job, get_candidates_by_stage, get_candidates_by_source
 - move_candidate_stage, add_candidate_note, create_candidate, archive_candidate
 - schedule_interview, reschedule_interview, cancel_interview, get_upcoming_interviews
 - create_offer, get_pending_offers, get_candidate_offer
 - reject_application, apply_candidate_to_job
 - get_application_history, get_application_feedback
-- get_pipeline_overview, get_stale_candidates, get_team_members
+- get_pipeline_overview, get_stale_candidates, get_team_members, generate_report
 
 Format: **Name** - status. Action?
 Example: "**Lena Chen** in Phone Screen. Move to Technical?"
@@ -698,6 +698,34 @@ TOOLS = [
                 }
             },
             "required": []
+        }
+    },
+    {
+        "name": "get_candidates_by_source",
+        "description": "Get candidates grouped by their source (referral, LinkedIn, job board, etc.).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "source_filter": {
+                    "type": "string",
+                    "description": "Filter to a specific source (e.g., 'LinkedIn', 'Referral')"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "generate_report",
+        "description": "Generate a recruiting report (pipeline, time-to-hire, source effectiveness, etc.).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "report_type": {
+                    "type": "string",
+                    "description": "Type of report: 'pipeline', 'time_to_hire', 'source_effectiveness', 'offer_acceptance'"
+                }
+            },
+            "required": ["report_type"]
         }
     }
 ]
@@ -1292,6 +1320,27 @@ def execute_tool(tool_name: str, tool_input: Dict) -> str:
                     "notes": fb.get("notes")
                 })
             return json.dumps(results, indent=2, default=str)
+
+        elif tool_name == "get_candidates_by_source":
+            source_filter = tool_input.get("source_filter")
+            by_source = ashby.get_applications_by_source(source_filter)
+            results = {}
+            for source, apps in by_source.items():
+                results[source] = []
+                for app in apps[:10]:  # Limit per source
+                    results[source].append({
+                        "name": app.get("candidate", {}).get("name"),
+                        "job": app.get("job", {}).get("title"),
+                        "stage": app.get("currentInterviewStage", {}).get("title")
+                    })
+            return json.dumps(results, indent=2)
+
+        elif tool_name == "generate_report":
+            report_type = tool_input.get("report_type")
+            report = ashby.generate_report(report_type)
+            if not report:
+                return json.dumps({"error": f"Could not generate report of type '{report_type}'"})
+            return json.dumps(report, indent=2, default=str)
 
         else:
             return json.dumps({"error": f"Unknown tool: {tool_name}"})

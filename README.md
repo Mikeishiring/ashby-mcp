@@ -18,10 +18,59 @@ A Slack bot that provides natural language access to Ashby ATS using Claude AI.
 ### Features
 
 - **@mention interaction** - `@AshbyBot who's stale in the pipeline?`
-- **Read operations** - Pipeline overview, candidate search, job details
-- **Write operations with confirmation** - Add notes, move candidates (emoji confirmation)
-- **Daily summary** - Scheduled post of stale candidates + decisions needed
+- **Thread memory** - Remembers context within conversation threads
+- **26 tools** - Full Ashby API coverage (see below)
+- **Write operations with confirmation** - Add notes, move candidates, schedule interviews
 - **Safety controls** - Batch limits, hired candidate protection, confirmation flows
+
+### Available Tools (26 total)
+
+**Search & Discovery**
+- `search_candidates` - Search by name or email
+- `get_candidate_details` - Full candidate info with history
+- `get_candidates_by_job` - All candidates for a specific job
+- `get_candidates_by_stage` - All candidates in a specific stage
+- `get_candidates_by_source` - Filter by application source (LinkedIn, referral, etc.)
+- `get_candidates_needing_decision` - Candidates waiting on hiring decisions
+
+**Pipeline & Analytics**
+- `get_pipeline_overview` - Full pipeline summary by stage and job
+- `get_stale_candidates` - Candidates stuck >14 days in stage
+- `get_recent_applications` - New candidates in last N days
+- `get_pipeline_velocity` - Velocity metrics and conversion rates
+- `generate_report` - Generate recruiting reports
+
+**Jobs**
+- `get_open_jobs` - List all open positions
+- `get_job_details` - Job description and requirements
+- `get_interview_stages` - Available interview stages
+
+**Candidate Actions**
+- `add_candidate_note` - Add notes (auto-tagged [via Claude])
+- `move_candidate_stage` - Move candidates between stages
+- `create_candidate` - Create new candidate
+- `archive_candidate` - Remove from active pipeline
+- `apply_candidate_to_job` - Apply existing candidate to different job
+- `reject_application` - Reject/archive an application
+
+**Interviews**
+- `get_upcoming_interviews` - All scheduled interviews
+- `schedule_interview` - Schedule new interview
+- `reschedule_interview` - Change time/interviewer/location
+- `cancel_interview` - Cancel scheduled interview
+
+**Offers**
+- `get_pending_offers` - Offers awaiting response
+- `get_candidate_offer` - Get offer details for a candidate
+- `create_offer` - Create new offer
+
+**Team & Sources**
+- `get_team_members` - List interviewers/hiring team
+- `get_sources` - Candidate sources list
+
+**History & Feedback**
+- `get_application_history` - Stage transition timeline
+- `get_application_feedback` - Interview feedback/scorecards
 
 ### Quick Start
 

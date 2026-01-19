@@ -191,6 +191,25 @@ export interface Interview {
   interviewers: Interviewer[];
 }
 
+export interface InterviewSchedule {
+  id: string;
+  applicationId: string;
+  interviewEvents: InterviewEvent[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InterviewEvent {
+  id: string;
+  startTime: string;
+  endTime: string;
+  interviewerIds: string[];
+  interviewers?: User[];
+  location?: string;
+  meetingLink?: string;
+  title?: string;
+}
+
 export type InterviewStatus =
   | "NotScheduled"
   | "Scheduled"
