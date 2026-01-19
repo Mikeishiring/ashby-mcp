@@ -202,7 +202,9 @@ export class AshbyClient {
     const cached = this.getCached<Job[]>(cacheKey);
     if (cached) return cached;
 
-    const results = await this.getAllPaginated<Job>("job.list", { status });
+    // Ashby API doesn't support status filter directly, so we fetch all and filter client-side
+    const allJobs = await this.getAllPaginated<Job>("job.list");
+    const results = status ? allJobs.filter(job => job.status === status) : allJobs;
     this.setCache(cacheKey, results, AshbyClient.CACHE_TTL.jobs);
     return results;
   }
