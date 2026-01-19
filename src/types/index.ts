@@ -1,0 +1,95 @@
+/**
+ * Type exports
+ */
+
+export * from "./ashby.js";
+
+// =============================================================================
+// Bot-specific Types
+// =============================================================================
+
+/**
+ * Pending confirmation for write operations
+ */
+export interface PendingConfirmation {
+  id: string;
+  type: "move_stage" | "add_note" | "batch_move";
+  description: string;
+  candidateIds: string[];
+  payload: unknown;
+  channelId: string;
+  messageTs: string;
+  userId: string;
+  createdAt: Date;
+  expiresAt: Date;
+}
+
+/**
+ * Result of a write operation
+ */
+export interface WriteResult {
+  success: boolean;
+  message: string;
+  candidateId?: string;
+  error?: string;
+}
+
+/**
+ * Claude tool definition
+ */
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  input_schema: {
+    type: "object";
+    properties: Record<string, unknown>;
+    required?: string[];
+  };
+}
+
+/**
+ * Tool execution result
+ */
+export interface ToolResult {
+  success: boolean;
+  data?: unknown;
+  error?: string;
+  requiresConfirmation?: boolean;
+  confirmationId?: string;
+}
+
+/**
+ * Slack message context
+ */
+export interface MessageContext {
+  channelId: string;
+  threadTs?: string;
+  userId: string;
+  text: string;
+  messageTs: string;
+}
+
+/**
+ * Daily summary data
+ */
+export interface DailySummaryData {
+  staleCandidate: Array<{
+    name: string;
+    email: string;
+    stage: string;
+    job: string;
+    daysInStage: number;
+  }>;
+  needsDecision: Array<{
+    name: string;
+    email: string;
+    stage: string;
+    job: string;
+    daysWaiting: number;
+  }>;
+  stats: {
+    totalActive: number;
+    openRoles: number;
+    newApplications: number;
+  };
+}
