@@ -134,24 +134,24 @@ claude = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 ashby = AshbyClient(api_key=ASHBY_API_KEY)
 
 # System prompt for Claude
-SYSTEM_PROMPT = """MAX 3 LINES. No exceptions.
+SYSTEM_PROMPT = """You are a terse recruiting assistant. CRITICAL RULES:
 
-GOOD:
-"**Lena** - App Review. Moving to Recruiter Screen - confirm?"
+1. MAX 2 SENTENCES. Never use bullet points or lists.
+2. NEVER say "I don't have access" or "check Ashby directly" - USE YOUR TOOLS.
+3. Remember context - if we just discussed Lena, don't ask "which candidate?"
+4. If a tool fails, say what failed and offer ONE alternative.
 
-BAD (NEVER DO):
-- Bullet lists
-- "I'm encountering API issues"
-- "Check Ashby directly"
-- "Would you like me to..."
-- "This could be due to..."
-- "Next steps:" lists
-- Any response over 3 lines
+YOUR TOOLS (use them!):
+- search_candidates, get_candidate_details, get_candidates_by_job, get_candidates_by_stage
+- move_candidate_stage, add_candidate_note, create_candidate, archive_candidate
+- schedule_interview, reschedule_interview, cancel_interview, get_upcoming_interviews
+- create_offer, get_pending_offers, get_candidate_offer
+- reject_application, apply_candidate_to_job
+- get_application_history, get_application_feedback
+- get_pipeline_overview, get_stale_candidates, get_team_members
 
-If something fails: state what you know + offer one action. That's it.
-Example: "**Lena** found but stage move failed. Try different stage name?"
-
-You have tools: search, details, move stages, schedule interviews, offers, notes. Use them.
+Format: **Name** - status. Action?
+Example: "**Lena Chen** in Phone Screen. Move to Technical?"
 """
 
 # Tool definitions for Claude
@@ -563,6 +563,142 @@ TOOLS = [
             "properties": {},
             "required": []
         }
+    },
+    {
+        "name": "reschedule_interview",
+        "description": "Reschedule/update an existing interview. Change time, interviewers, or location. REQUIRES CONFIRMATION.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "interview_id": {
+                    "type": "string",
+                    "description": "The interview schedule ID to update"
+                },
+                "candidate_name": {
+                    "type": "string",
+                    "description": "Candidate name (will find their scheduled interview)"
+                },
+                "new_start_time": {
+                    "type": "string",
+                    "description": "New start time in ISO 8601 format or natural language"
+                },
+                "new_duration_minutes": {
+                    "type": "integer",
+                    "description": "New duration in minutes"
+                },
+                "new_interviewer_name": {
+                    "type": "string",
+                    "description": "New interviewer name (optional)"
+                },
+                "new_location": {
+                    "type": "string",
+                    "description": "New location (optional)"
+                },
+                "new_meeting_link": {
+                    "type": "string",
+                    "description": "New meeting link (optional)"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "archive_candidate",
+        "description": "Archive a candidate (remove from active pipeline). REQUIRES CONFIRMATION.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "candidate_id": {
+                    "type": "string",
+                    "description": "The candidate ID to archive"
+                },
+                "candidate_name": {
+                    "type": "string",
+                    "description": "Candidate name (alternative to ID)"
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Reason for archiving"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "apply_candidate_to_job",
+        "description": "Apply an existing candidate to a different/additional job. REQUIRES CONFIRMATION.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "candidate_id": {
+                    "type": "string",
+                    "description": "The candidate ID"
+                },
+                "candidate_name": {
+                    "type": "string",
+                    "description": "Candidate name (alternative to ID)"
+                },
+                "job_title": {
+                    "type": "string",
+                    "description": "Job title to apply for"
+                }
+            },
+            "required": ["job_title"]
+        }
+    },
+    {
+        "name": "get_candidate_offer",
+        "description": "Get the offer details for a specific candidate.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "candidate_name": {
+                    "type": "string",
+                    "description": "Candidate name"
+                },
+                "application_id": {
+                    "type": "string",
+                    "description": "Application ID (alternative)"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "get_application_history",
+        "description": "Get the full stage transition history for a candidate's application.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "candidate_name": {
+                    "type": "string",
+                    "description": "Candidate name"
+                },
+                "application_id": {
+                    "type": "string",
+                    "description": "Application ID (alternative)"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "get_application_feedback",
+        "description": "Get all interview feedback and scorecards for a candidate's application.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "candidate_name": {
+                    "type": "string",
+                    "description": "Candidate name"
+                },
+                "application_id": {
+                    "type": "string",
+                    "description": "Application ID (alternative)"
+                }
+            },
+            "required": []
+        }
     }
 ]
 
@@ -969,6 +1105,193 @@ def execute_tool(tool_name: str, tool_input: Dict) -> str:
         elif tool_name == "get_pipeline_velocity":
             metrics = ashby.get_pipeline_velocity()
             return json.dumps(metrics, indent=2, default=str)
+
+        # ==================== NEW TOOL HANDLERS ====================
+
+        elif tool_name == "reschedule_interview":
+            interview_id = tool_input.get("interview_id")
+            candidate_name = tool_input.get("candidate_name")
+            new_start_time = tool_input.get("new_start_time")
+            new_duration_minutes = tool_input.get("new_duration_minutes", 60)
+            new_interviewer_name = tool_input.get("new_interviewer_name")
+            new_location = tool_input.get("new_location")
+            new_meeting_link = tool_input.get("new_meeting_link")
+
+            # Find interview by candidate if no ID provided
+            if not interview_id and candidate_name:
+                interviews = ashby.get_upcoming_interviews()
+                for interview in interviews:
+                    if candidate_name.lower() in interview.get("candidate", {}).get("name", "").lower():
+                        interview_id = interview.get("id")
+                        break
+                if not interview_id:
+                    return json.dumps({"error": f"No upcoming interview found for '{candidate_name}'"})
+
+            if not interview_id:
+                return json.dumps({"error": "Either interview_id or candidate_name is required"})
+
+            # Find new interviewer if specified
+            new_interviewer_id = None
+            if new_interviewer_name:
+                user = ashby.get_user_by_name(new_interviewer_name)
+                if user:
+                    new_interviewer_id = user.get("id")
+
+            return json.dumps({
+                "action": "reschedule_interview",
+                "requires_confirmation": True,
+                "interview_id": interview_id,
+                "new_start_time": new_start_time,
+                "new_duration_minutes": new_duration_minutes,
+                "new_interviewer_id": new_interviewer_id,
+                "new_interviewer_name": new_interviewer_name,
+                "new_location": new_location,
+                "new_meeting_link": new_meeting_link,
+                "message": f"Ready to reschedule interview" + (f" to {new_start_time}" if new_start_time else "")
+            })
+
+        elif tool_name == "archive_candidate":
+            candidate_id = tool_input.get("candidate_id")
+            candidate_name = tool_input.get("candidate_name")
+            reason = tool_input.get("reason")
+
+            # Find candidate if only name provided
+            if not candidate_id and candidate_name:
+                apps = ashby.get_active_applications()
+                for app in apps:
+                    if candidate_name.lower() in app.get("candidate", {}).get("name", "").lower():
+                        candidate_id = app.get("candidate", {}).get("id")
+                        candidate_name = app.get("candidate", {}).get("name")
+                        break
+                if not candidate_id:
+                    return json.dumps({"error": f"No candidate found matching '{candidate_name}'"})
+
+            if not candidate_id:
+                return json.dumps({"error": "Either candidate_id or candidate_name is required"})
+
+            return json.dumps({
+                "action": "archive_candidate",
+                "requires_confirmation": True,
+                "candidate_id": candidate_id,
+                "candidate_name": candidate_name,
+                "reason": reason,
+                "message": f"Ready to archive {candidate_name or candidate_id}. Reason: {reason or 'Not specified'}"
+            })
+
+        elif tool_name == "apply_candidate_to_job":
+            candidate_id = tool_input.get("candidate_id")
+            candidate_name = tool_input.get("candidate_name")
+            job_title = tool_input.get("job_title")
+
+            # Find candidate if only name provided
+            if not candidate_id and candidate_name:
+                apps = ashby.get_active_applications()
+                for app in apps:
+                    if candidate_name.lower() in app.get("candidate", {}).get("name", "").lower():
+                        candidate_id = app.get("candidate", {}).get("id")
+                        candidate_name = app.get("candidate", {}).get("name")
+                        break
+                if not candidate_id:
+                    return json.dumps({"error": f"No candidate found matching '{candidate_name}'"})
+
+            if not candidate_id:
+                return json.dumps({"error": "Either candidate_id or candidate_name is required"})
+
+            # Find job
+            job = ashby.get_job_by_title(job_title)
+            if not job:
+                return json.dumps({"error": f"No job found matching '{job_title}'"})
+
+            return json.dumps({
+                "action": "apply_candidate_to_job",
+                "requires_confirmation": True,
+                "candidate_id": candidate_id,
+                "candidate_name": candidate_name,
+                "job_id": job.get("id"),
+                "job_title": job.get("title"),
+                "message": f"Ready to apply {candidate_name or candidate_id} to {job.get('title')}"
+            })
+
+        elif tool_name == "get_candidate_offer":
+            candidate_name = tool_input.get("candidate_name")
+            application_id = tool_input.get("application_id")
+
+            # Find application if only candidate name provided
+            if not application_id and candidate_name:
+                apps = ashby.get_active_applications()
+                for app in apps:
+                    if candidate_name.lower() in app.get("candidate", {}).get("name", "").lower():
+                        application_id = app.get("id")
+                        break
+                if not application_id:
+                    return json.dumps({"error": f"No application found for '{candidate_name}'"})
+
+            if not application_id:
+                return json.dumps({"error": "Either application_id or candidate_name is required"})
+
+            offer = ashby.get_offer_by_application(application_id)
+            if not offer:
+                return json.dumps({"message": "No offer found for this candidate"})
+
+            return json.dumps({
+                "offer_id": offer.get("id"),
+                "status": offer.get("status"),
+                "start_date": offer.get("startDate"),
+                "created_at": offer.get("createdAt")
+            }, indent=2)
+
+        elif tool_name == "get_application_history":
+            candidate_name = tool_input.get("candidate_name")
+            application_id = tool_input.get("application_id")
+
+            # Find application if only candidate name provided
+            if not application_id and candidate_name:
+                apps = ashby.get_active_applications()
+                for app in apps:
+                    if candidate_name.lower() in app.get("candidate", {}).get("name", "").lower():
+                        application_id = app.get("id")
+                        break
+                if not application_id:
+                    return json.dumps({"error": f"No application found for '{candidate_name}'"})
+
+            if not application_id:
+                return json.dumps({"error": "Either application_id or candidate_name is required"})
+
+            history = ashby.get_application_history(application_id)
+            return json.dumps(history, indent=2, default=str)
+
+        elif tool_name == "get_application_feedback":
+            candidate_name = tool_input.get("candidate_name")
+            application_id = tool_input.get("application_id")
+
+            # Find application if only candidate name provided
+            if not application_id and candidate_name:
+                apps = ashby.get_active_applications()
+                for app in apps:
+                    if candidate_name.lower() in app.get("candidate", {}).get("name", "").lower():
+                        application_id = app.get("id")
+                        break
+                if not application_id:
+                    return json.dumps({"error": f"No application found for '{candidate_name}'"})
+
+            if not application_id:
+                return json.dumps({"error": "Either application_id or candidate_name is required"})
+
+            feedback = ashby.get_application_feedback(application_id)
+            if not feedback:
+                return json.dumps({"message": "No feedback found for this application"})
+
+            results = []
+            for fb in feedback:
+                results.append({
+                    "feedback_id": fb.get("id"),
+                    "rating": fb.get("rating"),
+                    "submitted_by": fb.get("submittedBy", {}).get("name"),
+                    "submitted_at": fb.get("submittedAt"),
+                    "interview_stage": fb.get("interviewStage", {}).get("title"),
+                    "notes": fb.get("notes")
+                })
+            return json.dumps(results, indent=2, default=str)
 
         else:
             return json.dumps({"error": f"Unknown tool: {tool_name}"})
