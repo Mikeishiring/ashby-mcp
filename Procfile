@@ -1,1 +1,1 @@
-worker: python slack_bot.py
+worker: node dist/index.js
