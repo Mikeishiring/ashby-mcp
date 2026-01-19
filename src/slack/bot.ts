@@ -65,11 +65,22 @@ export class SlackBot {
       // Skip if we can't identify the user
       if (!event.user) return;
 
+      const cleanedText = this.cleanMentionText(event.text);
+
+      // Skip if the message is empty (just an @mention with no text)
+      if (!cleanedText.trim()) {
+        await say({
+          text: "Hi! How can I help you with Ashby today? Try asking about open jobs, candidates, or the hiring pipeline.",
+          thread_ts: event.thread_ts ?? event.ts,
+        });
+        return;
+      }
+
       const context: MessageContext = {
         channelId: event.channel,
         threadTs: event.thread_ts ?? event.ts,
         userId: event.user,
-        text: this.cleanMentionText(event.text),
+        text: cleanedText,
         messageTs: event.ts,
       };
 
