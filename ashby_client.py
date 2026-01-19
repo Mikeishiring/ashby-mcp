@@ -596,10 +596,362 @@ class AshbyClient:
     def get_pipeline_velocity_with_confidence(self) -> Dict[str, Any]:
         """Calculate velocity metrics with confidence intervals (Step 9)."""
         metrics = self.get_pipeline_velocity()
-        
+
         # Step 9: Predictive Confidence simulation
         metrics["_confidence"] = {
             "score": 0.92,
             "footnote": "Based on 45 comparable data points. High statistical significance."
         }
         return metrics
+
+    # ==================== CANDIDATE CREATION ====================
+
+    def create_candidate(
+        self,
+        name: str,
+        email: str,
+        phone: Optional[str] = None,
+        linkedin_url: Optional[str] = None,
+        github_url: Optional[str] = None,
+        website_url: Optional[str] = None,
+        location: Optional[str] = None,
+        source_id: Optional[str] = None,
+        credit_user_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Create a new candidate in Ashby.
+
+        Args:
+            name: Full name of the candidate (required)
+            email: Email address (required)
+            phone: Phone number
+            linkedin_url: LinkedIn profile URL
+            github_url: GitHub profile URL
+            website_url: Personal website URL
+            location: Location/address
+            source_id: Source ID (use get_sources() to find valid IDs)
+            credit_user_id: User ID to credit for sourcing
+
+        Returns:
+            Dict with candidate data or error
+        """
+        data = {
+            "name": name,
+            "email": email,
+        }
+
+        if phone:
+            data["phoneNumber"] = phone
+        if location:
+            data["location"] = location
+        if source_id:
+            data["sourceId"] = source_id
+        if credit_user_id:
+            data["creditedToUserId"] = credit_user_id
+
+        # Social links
+        social_links = []
+        if linkedin_url:
+            social_links.append({"type": "LinkedIn", "url": linkedin_url})
+        if github_url:
+            social_links.append({"type": "GitHub", "url": github_url})
+        if website_url:
+            social_links.append({"type": "Website", "url": website_url})
+        if social_links:
+            data["socialLinks"] = social_links
+
+        try:
+            response = self._post("candidate.create", data)
+            if response.get("success"):
+                return {"success": True, "candidate": response.get("results")}
+            return {"success": False, "error": response.get("errors", "Unknown error")}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def create_application(
+        self,
+        candidate_id: str,
+        job_id: str,
+        source_id: Optional[str] = None,
+        credit_user_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Create an application for an existing candidate to a job.
+
+        Args:
+            candidate_id: The candidate's ID
+            job_id: The job ID to apply for
+            source_id: Source ID for the application
+            credit_user_id: User ID to credit
+
+        Returns:
+            Dict with application data or error
+        """
+        data = {
+            "candidateId": candidate_id,
+            "jobId": job_id,
+        }
+
+        if source_id:
+            data["sourceId"] = source_id
+        if credit_user_id:
+            data["creditedToUserId"] = credit_user_id
+
+        try:
+            response = self._post("application.create", data)
+            if response.get("success"):
+                return {"success": True, "application": response.get("results")}
+            return {"success": False, "error": response.get("errors", "Unknown error")}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    # ==================== INTERVIEW SCHEDULING ====================
+
+    def schedule_interview(
+        self,
+        application_id: str,
+        interview_stage_id: str,
+        start_time: str,
+        end_time: str,
+        interviewer_user_ids: List[str],
+        location: Optional[str] = None,
+        meeting_link: Optional[str] = None,
+        interview_type: str = "in_person"
+    ) -> Dict[str, Any]:
+        """
+        Schedule an interview for an application.
+
+        Args:
+            application_id: The application ID
+            interview_stage_id: The interview stage ID
+            start_time: ISO 8601 datetime string (e.g., "2024-01-15T10:00:00Z")
+            end_time: ISO 8601 datetime string
+            interviewer_user_ids: List of Ashby user IDs who will interview
+            location: Physical location (optional)
+            meeting_link: Video meeting URL (optional)
+            interview_type: "in_person", "phone", or "video" (default: "in_person")
+
+        Returns:
+            Dict with interview schedule data or error
+        """
+        data = {
+            "applicationId": application_id,
+            "interviewStageId": interview_stage_id,
+            "startTime": start_time,
+            "endTime": end_time,
+            "interviewerUserIds": interviewer_user_ids,
+        }
+
+        if location:
+            data["location"] = location
+        if meeting_link:
+            data["meetingLink"] = meeting_link
+        if interview_type:
+            data["interviewType"] = interview_type
+
+        try:
+            response = self._post("interviewSchedule.create", data)
+            if response.get("success"):
+                return {"success": True, "interview": response.get("results")}
+            return {"success": False, "error": response.get("errors", "Unknown error")}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def cancel_interview(self, interview_schedule_id: str, reason: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Cancel a scheduled interview.
+
+        Args:
+            interview_schedule_id: The interview schedule ID to cancel
+            reason: Optional cancellation reason
+
+        Returns:
+            Dict with success status
+        """
+        data = {"interviewScheduleId": interview_schedule_id}
+        if reason:
+            data["cancellationReason"] = reason
+
+        try:
+            response = self._post("interviewSchedule.cancel", data)
+            if response.get("success"):
+                return {"success": True, "message": "Interview cancelled"}
+            return {"success": False, "error": response.get("errors", "Unknown error")}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def update_interview(
+        self,
+        interview_schedule_id: str,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        interviewer_user_ids: Optional[List[str]] = None,
+        location: Optional[str] = None,
+        meeting_link: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Update a scheduled interview.
+
+        Args:
+            interview_schedule_id: The interview schedule ID to update
+            start_time: New start time (ISO 8601)
+            end_time: New end time (ISO 8601)
+            interviewer_user_ids: New list of interviewer IDs
+            location: New location
+            meeting_link: New meeting link
+
+        Returns:
+            Dict with updated interview data or error
+        """
+        data = {"interviewScheduleId": interview_schedule_id}
+
+        if start_time:
+            data["startTime"] = start_time
+        if end_time:
+            data["endTime"] = end_time
+        if interviewer_user_ids:
+            data["interviewerUserIds"] = interviewer_user_ids
+        if location:
+            data["location"] = location
+        if meeting_link:
+            data["meetingLink"] = meeting_link
+
+        try:
+            response = self._post("interviewSchedule.update", data)
+            if response.get("success"):
+                return {"success": True, "interview": response.get("results")}
+            return {"success": False, "error": response.get("errors", "Unknown error")}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    # ==================== OFFER MANAGEMENT ====================
+
+    def create_offer(
+        self,
+        application_id: str,
+        start_date: str,
+        salary: Optional[float] = None,
+        currency: str = "USD",
+        offer_details: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Create an offer for an application.
+
+        Args:
+            application_id: The application ID
+            start_date: Proposed start date (ISO 8601 date string)
+            salary: Base salary amount
+            currency: Currency code (default: USD)
+            offer_details: Additional offer details/notes
+
+        Returns:
+            Dict with offer data or error
+        """
+        data = {
+            "applicationId": application_id,
+            "startDate": start_date,
+        }
+
+        if salary:
+            data["compensation"] = {
+                "baseSalary": salary,
+                "currency": currency
+            }
+        if offer_details:
+            data["notes"] = offer_details
+
+        try:
+            response = self._post("offer.create", data)
+            if response.get("success"):
+                return {"success": True, "offer": response.get("results")}
+            return {"success": False, "error": response.get("errors", "Unknown error")}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def get_offer_by_application(self, application_id: str) -> Optional[Dict]:
+        """Get the offer for a specific application."""
+        offers = self.get_offers()
+        for offer in offers:
+            if offer.get("applicationId") == application_id:
+                return offer
+        return None
+
+    # ==================== USER MANAGEMENT ====================
+
+    def get_users(self) -> List[Dict]:
+        """Get all users (interviewers/hiring team members)."""
+        try:
+            response = self._post("user.list")
+            if response.get("success"):
+                return response.get("results", [])
+        except:
+            pass
+        return []
+
+    def get_user_by_email(self, email: str) -> Optional[Dict]:
+        """Find a user by email address."""
+        users = self.get_users()
+        email_lower = email.lower()
+        return next((u for u in users if u.get("email", "").lower() == email_lower), None)
+
+    def get_user_by_name(self, name: str) -> Optional[Dict]:
+        """Find a user by name (fuzzy match)."""
+        users = self.get_users()
+        name_lower = name.lower()
+        return next((u for u in users if name_lower in u.get("name", "").lower()), None)
+
+    # ==================== ARCHIVING ====================
+
+    def archive_candidate(self, candidate_id: str, reason: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Archive a candidate.
+
+        Args:
+            candidate_id: The candidate ID to archive
+            reason: Optional reason for archiving
+
+        Returns:
+            Dict with success status
+        """
+        data = {"candidateId": candidate_id}
+        if reason:
+            data["reason"] = reason
+
+        try:
+            response = self._post("candidate.archive", data)
+            if response.get("success"):
+                return {"success": True, "message": "Candidate archived"}
+            return {"success": False, "error": response.get("errors", "Unknown error")}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def reject_application(
+        self,
+        application_id: str,
+        reason_id: Optional[str] = None,
+        reason_text: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Reject an application.
+
+        Args:
+            application_id: The application ID to reject
+            reason_id: Rejection reason ID from Ashby
+            reason_text: Free-text rejection reason
+
+        Returns:
+            Dict with success status
+        """
+        data = {"applicationId": application_id}
+        if reason_id:
+            data["archiveReasonId"] = reason_id
+        if reason_text:
+            data["archiveReasonText"] = reason_text
+
+        try:
+            response = self._post("application.archive", data)
+            if response.get("success"):
+                return {"success": True, "message": "Application rejected/archived"}
+            return {"success": False, "error": response.get("errors", "Unknown error")}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
