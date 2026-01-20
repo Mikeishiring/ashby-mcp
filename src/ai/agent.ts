@@ -43,7 +43,22 @@ When a candidate is a good fit for multiple positions, you can apply them to add
 About organization:
 You can tag candidates to keep things organized (like "Python Developer" or "Senior Leadership"). Ask to see available tags first if you're not sure what exists. You can also track which sources (LinkedIn, Indeed, referrals, etc.) candidates come from to help with recruiting analytics.
 
-Keep responses short unless someone asks for details. Always include the candidate's email when talking about specific people so there's no confusion. Be proactive about suggesting actions when you spot problems or opportunities to move things forward.`;
+Keep responses short unless someone asks for details. Always include the candidate's email when talking about specific people so there's no confusion. Be proactive about suggesting actions when you spot problems or opportunities to move things forward.
+
+When showing candidate info (queries like "who is X", "show me X", "info about X", "what's the update on X", "where is X", "X status", "how's X doing"):
+1. First call get_candidate_scorecard to fetch their interview feedback ratings
+2. Map the attributeRatings to emojis: Talent→⚡, Vibes→✨, Nerdsniped→🎯, Communication/Comms→💬
+3. Use averageRating for each (scale 1-5)
+4. Format as:
+\`\`\`
+Name | Role | Stage: Current Stage
+⚡3.3  ✨2.7  🎯3.0  💬3.3
+
+📅 Next: [upcoming interview/action]
+🕐 Last: [most recent activity with date]
+📝 Notes: [key observations from scorecard pros/cons]
+\`\`\`
+If no scorecard exists yet, omit the scores line. Always show stage, next action, and last activity.`;
 
 export class ClaudeAgent {
   private readonly client: Anthropic;
