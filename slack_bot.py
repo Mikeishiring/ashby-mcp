@@ -22,6 +22,187 @@ from ashby_client import AshbyClient
 
 
 # ===========================================================================
+# Security: Prompt Injection Protection
+# ===========================================================================
+
+# Patterns that indicate potential prompt injection attempts
+INJECTION_PATTERNS = [
+    r"ignore\s+(previous|all|above|prior)\s+(instructions?|prompts?|rules?)",
+    r"forget\s+(everything|all|your)\s+(instructions?|rules?|training)",
+    r"you\s+are\s+now\s+a",
+    r"new\s+instructions?:",
+    r"system\s*:\s*",
+    r"<\s*system\s*>",
+    r"\[\s*SYSTEM\s*\]",
+    r"act\s+as\s+(if|though)",
+    r"pretend\s+(you|to\s+be)",
+    r"override\s+(your|all|safety)",
+    r"disregard\s+(your|all|previous)",
+]
+
+# Compile patterns for efficiency
+_injection_regex = re.compile("|".join(INJECTION_PATTERNS), re.IGNORECASE)
+
+
+def sanitize_for_llm(text: str, field_name: str = "input") -> str:
+    """
+    Sanitize text from external sources before including in LLM context.
+    Escapes quotes and wraps in clear delimiters.
+    """
+    if not text:
+        return ""
+
+    # Check for injection patterns
+    if _injection_regex.search(text):
+        logger.warning(f"Potential prompt injection detected in {field_name}: {text[:100]}")
+        # Don't block, but clearly mark as untrusted
+        text = f"[UNTRUSTED CONTENT - potential injection detected]: {text}"
+
+    # Escape quotes to prevent breaking out of string context
+    sanitized = text.replace('"', '\\"').replace("'", "\\'")
+
+    # Wrap in clear delimiters
+    return f'[{field_name.upper()}_START]{sanitized}[{field_name.upper()}_END]'
+
+
+def sanitize_candidate_data(candidate: Dict) -> Dict:
+    """Sanitize candidate data fields that could contain injections."""
+    if not candidate:
+        return candidate
+
+    sanitized = candidate.copy()
+
+    # Fields that could contain user-controlled content
+    text_fields = ["name", "notes", "resume", "coverLetter", "headline"]
+
+    for field in text_fields:
+        if field in sanitized and sanitized[field]:
+            sanitized[field] = sanitize_for_llm(sanitized[field], f"candidate_{field}")
+
+    return sanitized
+
+
+# ===========================================================================
+# Security: Rate Limiting
+# ===========================================================================
+
+class RateLimiter:
+    """Per-user rate limiting to prevent abuse."""
+
+    def __init__(self, max_requests: int = 20, window_seconds: int = 60):
+        self._requests: Dict[str, List[float]] = defaultdict(list)
+        self._max_requests = max_requests
+        self._window = window_seconds
+
+    def is_allowed(self, user_id: str) -> bool:
+        """Check if user is within rate limits."""
+        now = time.time()
+        window_start = now - self._window
+
+        # Clean old requests
+        self._requests[user_id] = [
+            ts for ts in self._requests[user_id] if ts > window_start
+        ]
+
+        # Check limit
+        if len(self._requests[user_id]) >= self._max_requests:
+            return False
+
+        # Record this request
+        self._requests[user_id].append(now)
+        return True
+
+    def get_remaining(self, user_id: str) -> int:
+        """Get remaining requests for user."""
+        now = time.time()
+        window_start = now - self._window
+        recent = [ts for ts in self._requests[user_id] if ts > window_start]
+        return max(0, self._max_requests - len(recent))
+
+
+# Global rate limiter
+rate_limiter = RateLimiter(max_requests=20, window_seconds=60)
+
+
+# ===========================================================================
+# Security: Secret Exposure Protection
+# ===========================================================================
+
+def sanitize_error(error: Exception) -> str:
+    """Remove sensitive information from error messages."""
+    error_str = str(error)
+
+    # Patterns that might contain secrets
+    secret_patterns = [
+        (r"(api[_-]?key|apikey|token|secret|password|credential)[=:]\s*['\"]?[\w\-\.]+['\"]?", r"\1=[REDACTED]"),
+        (r"(Bearer|Basic)\s+[\w\-\.]+", r"\1 [REDACTED]"),
+        (r"sk-ant-[\w\-]+", "[ANTHROPIC_KEY_REDACTED]"),
+        (r"xox[baprs]-[\w\-]+", "[SLACK_TOKEN_REDACTED]"),
+    ]
+
+    for pattern, replacement in secret_patterns:
+        error_str = re.sub(pattern, replacement, error_str, flags=re.IGNORECASE)
+
+    return error_str
+
+
+# ===========================================================================
+# Security: Pending Actions Store (Confirmation Flow)
+# ===========================================================================
+
+class PendingActionsStore:
+    """Store pending actions awaiting user confirmation via emoji reaction."""
+
+    def __init__(self, ttl_seconds: int = 300):  # 5 minute expiry
+        self._actions: Dict[str, Dict] = {}
+        self._ttl = ttl_seconds
+
+    def _cleanup_expired(self):
+        """Remove expired pending actions."""
+        now = time.time()
+        expired = [k for k, v in self._actions.items()
+                   if now - v.get("created_at", 0) > self._ttl]
+        for k in expired:
+            del self._actions[k]
+
+    def store(self, message_ts: str, channel_id: str, action_data: Dict, user_id: str) -> str:
+        """Store a pending action and return its key."""
+        self._cleanup_expired()
+        key = f"{channel_id}:{message_ts}"
+        self._actions[key] = {
+            "action": action_data,
+            "user_id": user_id,  # Only this user can confirm
+            "channel_id": channel_id,
+            "message_ts": message_ts,
+            "created_at": time.time()
+        }
+        return key
+
+    def get(self, channel_id: str, message_ts: str) -> Optional[Dict]:
+        """Get a pending action by message coordinates."""
+        self._cleanup_expired()
+        key = f"{channel_id}:{message_ts}"
+        return self._actions.get(key)
+
+    def remove(self, channel_id: str, message_ts: str) -> Optional[Dict]:
+        """Remove and return a pending action."""
+        self._cleanup_expired()
+        key = f"{channel_id}:{message_ts}"
+        return self._actions.pop(key, None)
+
+    def get_by_thread(self, channel_id: str, thread_ts: str) -> List[Dict]:
+        """Get all pending actions for a thread."""
+        self._cleanup_expired()
+        prefix = f"{channel_id}:"
+        return [v for k, v in self._actions.items()
+                if k.startswith(prefix) and v.get("thread_ts") == thread_ts]
+
+
+# Global pending actions store
+pending_actions = PendingActionsStore(ttl_seconds=300)
+
+
+# ===========================================================================
 # Conversation Memory Store
 # ===========================================================================
 
@@ -750,16 +931,72 @@ TOOLS = [
 ]
 
 
+# Indicators that a candidate has been hired (case-insensitive matching)
+HIRED_INDICATORS = [
+    "hired",
+    "accepted",
+    "offer accepted",
+    "started",
+    "onboarding",
+    "employee",
+    "converted",
+    "joined",
+]
+
+
 def is_hired(candidate: Dict) -> bool:
-    """Check if a candidate has been hired (should be protected)."""
+    """
+    Check if a candidate has been hired (should be protected).
+    Uses robust multi-field checking to prevent bypass attempts.
+    """
     if not candidate:
         return False
-    # Check application status
+
+    def matches_hired(text: str) -> bool:
+        """Check if text matches any hired indicator."""
+        if not text:
+            return False
+        text_lower = text.lower()
+        return any(indicator in text_lower for indicator in HIRED_INDICATORS)
+
+    # Check application status and stage
     for app in candidate.get("applications", []):
-        status = app.get("application", {}).get("status", "").lower()
-        stage = app.get("application", {}).get("currentInterviewStage", {}).get("title", "").lower()
-        if status == "hired" or "hired" in stage:
+        app_data = app.get("application", {}) if "application" in app else app
+
+        # Check status field
+        status = app_data.get("status", "")
+        if matches_hired(status):
             return True
+
+        # Check stage title
+        stage = app_data.get("currentInterviewStage", {}).get("title", "")
+        if matches_hired(stage):
+            return True
+
+        # Check stage type (some systems use type field)
+        stage_type = app_data.get("currentInterviewStage", {}).get("type", "")
+        if matches_hired(stage_type):
+            return True
+
+        # Check archiveReason (might indicate hired)
+        archive_reason = app_data.get("archiveReason", {})
+        if isinstance(archive_reason, dict):
+            reason_text = archive_reason.get("text", "") or archive_reason.get("title", "")
+            if matches_hired(reason_text):
+                return True
+        elif isinstance(archive_reason, str) and matches_hired(archive_reason):
+            return True
+
+        # Check outcome field if present
+        outcome = app_data.get("outcome", "")
+        if matches_hired(outcome):
+            return True
+
+    # Also check top-level status (some API responses put it here)
+    top_status = candidate.get("status", "")
+    if matches_hired(top_status):
+        return True
+
     return False
 
 
@@ -1466,7 +1703,9 @@ def execute_tool(tool_name: str, tool_input: Dict) -> str:
 
     except Exception as e:
         logger.error(f"Tool execution error: {e}")
-        return json.dumps({"error": str(e)})
+        # Sanitize error message to prevent secret exposure
+        safe_error = sanitize_error(e)
+        return json.dumps({"error": safe_error})
 
 
 def process_message_with_claude(
@@ -1474,8 +1713,11 @@ def process_message_with_claude(
     slack_user_id: str,
     channel_id: str,
     thread_ts: str
-) -> str:
-    """Send message to Claude and process tool calls with conversation memory."""
+) -> Dict[str, Any]:
+    """
+    Send message to Claude and process tool calls with conversation memory.
+    Returns dict with 'text' and optionally 'pending_action' for confirmation flow.
+    """
 
     # Get existing conversation history for this thread
     messages = conversation_memory.get_messages(channel_id, thread_ts).copy()
@@ -1494,6 +1736,9 @@ def process_message_with_claude(
         messages=messages
     )
 
+    # Track if we have a pending action requiring confirmation
+    pending_action_data = None
+
     # Process tool calls in a loop
     while response.stop_reason == "tool_use":
         # Extract tool use blocks
@@ -1510,6 +1755,15 @@ def process_message_with_claude(
                 "tool_use_id": tool_use.id,
                 "content": result
             })
+
+            # Check if this tool result requires confirmation
+            try:
+                result_data = json.loads(result)
+                if result_data.get("requires_confirmation"):
+                    pending_action_data = result_data
+                    logger.info(f"Action requires confirmation: {result_data.get('action')}")
+            except (json.JSONDecodeError, TypeError):
+                pass
 
         # Add assistant response and tool results to messages
         messages.append({"role": "assistant", "content": response.content})
@@ -1541,7 +1795,15 @@ def process_message_with_claude(
 
     # Extract final text response
     text_blocks = [block.text for block in response.content if hasattr(block, "text")]
-    return "\n".join(text_blocks)
+    response_text = "\n".join(text_blocks)
+
+    # Return result with pending action if any
+    result = {"text": response_text}
+    if pending_action_data:
+        result["pending_action"] = pending_action_data
+        result["user_id"] = slack_user_id
+
+    return result
 
 
 @app.event("app_mention")
@@ -1562,6 +1824,16 @@ def handle_mention(event: Dict, say, client: WebClient):
             )
             return
 
+    # Rate limiting check
+    if not rate_limiter.is_allowed(user_id):
+        remaining_wait = 60  # Approximate wait time
+        say(
+            text=f"You've sent too many requests. Please wait ~{remaining_wait}s before trying again.",
+            thread_ts=thread_ts
+        )
+        logger.warning(f"Rate limit exceeded for user {user_id}")
+        return
+
     # Remove the bot mention from the text
     clean_text = re.sub(r"<@[A-Z0-9]+>", "", text).strip()
 
@@ -1581,26 +1853,160 @@ def handle_mention(event: Dict, say, client: WebClient):
     try:
         # Process with Claude (now with conversation memory)
         logger.info(f"Processing message from {user_id} in {channel_id}/{thread_ts}: {clean_text}")
-        response = process_message_with_claude(
+        result = process_message_with_claude(
             user_message=clean_text,
             slack_user_id=user_id,
             channel_id=channel_id,
             thread_ts=thread_ts
         )
 
+        response_text = result.get("text", "")
+
         # Send response (in thread if in a thread)
-        say(text=response, thread_ts=thread_ts)
+        msg_response = client.chat_postMessage(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            text=response_text
+        )
+
+        # If there's a pending action requiring confirmation, add emoji reactions
+        if result.get("pending_action"):
+            message_ts = msg_response.get("ts")
+            if message_ts:
+                # Store the pending action
+                pending_actions.store(
+                    message_ts=message_ts,
+                    channel_id=channel_id,
+                    action_data=result["pending_action"],
+                    user_id=user_id
+                )
+
+                # Add reaction buttons
+                try:
+                    client.reactions_add(
+                        channel=channel_id,
+                        timestamp=message_ts,
+                        name="white_check_mark"
+                    )
+                    client.reactions_add(
+                        channel=channel_id,
+                        timestamp=message_ts,
+                        name="x"
+                    )
+                except Exception as react_error:
+                    logger.warning(f"Could not add reaction emojis: {react_error}")
 
     except Exception as e:
         logger.error(f"Error processing message: {e}", exc_info=True)
+        # Sanitize error to prevent secret exposure
+        safe_error = sanitize_error(e)
         say(
-            text=f"Sorry, I encountered an error: {str(e)}",
+            text=f"Sorry, I encountered an error: {safe_error}",
             thread_ts=thread_ts
         )
 
 
+def execute_confirmed_action(action_data: Dict) -> str:
+    """Execute an action that has been confirmed by the user."""
+    action_type = action_data.get("action")
+
+    try:
+        if action_type == "add_note":
+            result = ashby.add_note(
+                candidate_id=action_data.get("candidate_id"),
+                note=action_data.get("note")
+            )
+            return f"Note added successfully to candidate."
+
+        elif action_type == "move_stage":
+            result = ashby.move_to_stage(
+                application_id=action_data.get("application_id"),
+                stage_id=action_data.get("stage_id")
+            )
+            return f"Candidate moved to {action_data.get('stage_name')}."
+
+        elif action_type == "create_candidate":
+            result = ashby.create_candidate(
+                name=action_data.get("name"),
+                email=action_data.get("email"),
+                phone=action_data.get("phone"),
+                linkedin_url=action_data.get("linkedin_url"),
+                location=action_data.get("location")
+            )
+            msg = f"Candidate {action_data.get('name')} created."
+            # Apply to job if specified
+            if action_data.get("job_title"):
+                job = ashby.get_job_by_title(action_data.get("job_title"))
+                if job and result.get("id"):
+                    ashby.create_application(result.get("id"), job.get("id"))
+                    msg += f" Applied to {action_data.get('job_title')}."
+            return msg
+
+        elif action_type == "schedule_interview":
+            result = ashby.schedule_interview(
+                application_id=action_data.get("application_id"),
+                interviewer_user_id=action_data.get("interviewer_id"),
+                start_time=action_data.get("start_time"),
+                duration_minutes=action_data.get("duration_minutes", 60),
+                interview_type=action_data.get("interview_type", "video"),
+                meeting_link=action_data.get("meeting_link"),
+                location=action_data.get("location")
+            )
+            return f"Interview scheduled with {action_data.get('interviewer_name')}."
+
+        elif action_type == "cancel_interview":
+            result = ashby.cancel_interview(action_data.get("interview_id"))
+            return "Interview cancelled."
+
+        elif action_type == "reschedule_interview":
+            result = ashby.update_interview(
+                interview_schedule_id=action_data.get("interview_id"),
+                start_time=action_data.get("new_start_time"),
+                duration_minutes=action_data.get("new_duration_minutes"),
+                interviewer_user_ids=[action_data.get("new_interviewer_id")] if action_data.get("new_interviewer_id") else None,
+                location=action_data.get("new_location"),
+                meeting_link=action_data.get("new_meeting_link")
+            )
+            return "Interview rescheduled."
+
+        elif action_type == "create_offer":
+            result = ashby.create_offer(
+                application_id=action_data.get("application_id"),
+                start_date=action_data.get("start_date")
+            )
+            return "Offer created."
+
+        elif action_type == "reject_application":
+            result = ashby.reject_application(
+                application_id=action_data.get("application_id"),
+                reason=action_data.get("reason")
+            )
+            return f"Application rejected for {action_data.get('candidate_name', 'candidate')}."
+
+        elif action_type == "archive_candidate":
+            result = ashby.archive_candidate(
+                candidate_id=action_data.get("candidate_id"),
+                reason=action_data.get("reason")
+            )
+            return f"Candidate {action_data.get('candidate_name', '')} archived."
+
+        elif action_type == "apply_candidate_to_job":
+            result = ashby.create_application(
+                candidate_id=action_data.get("candidate_id"),
+                job_id=action_data.get("job_id")
+            )
+            return f"Applied {action_data.get('candidate_name', 'candidate')} to {action_data.get('job_title')}."
+
+        else:
+            return f"Unknown action type: {action_type}"
+
+    except Exception as e:
+        logger.error(f"Error executing confirmed action: {e}")
+        return f"Failed to execute: {sanitize_error(e)}"
+
+
 @app.event("reaction_added")
-def handle_reaction(event: Dict, client: WebClient):
+def handle_reaction(event: Dict, say, client: WebClient):
     """Handle emoji reactions for confirmations."""
     reaction = event.get("reaction")
     user_id = event.get("user")
@@ -1612,9 +2018,55 @@ def handle_reaction(event: Dict, client: WebClient):
     if reaction not in ["white_check_mark", "x"]:
         return
 
-    # TODO: Implement confirmation flow
-    # This would require storing pending actions and matching them to reactions
     logger.info(f"Reaction {reaction} from {user_id} on message {message_ts}")
+
+    # Look up pending action
+    pending = pending_actions.get(channel_id, message_ts)
+    if not pending:
+        # No pending action for this message
+        return
+
+    # Security: Only the user who initiated the action can confirm
+    if pending.get("user_id") != user_id:
+        logger.warning(f"User {user_id} tried to confirm action by {pending.get('user_id')}")
+        return
+
+    # Remove the pending action
+    action_data = pending_actions.remove(channel_id, message_ts)
+    if not action_data:
+        return
+
+    action = action_data.get("action", {})
+
+    # Get thread_ts for replying in thread
+    # Need to fetch original message to get thread_ts
+    try:
+        msg_result = client.conversations_history(
+            channel=channel_id,
+            latest=message_ts,
+            inclusive=True,
+            limit=1
+        )
+        thread_ts = message_ts
+        if msg_result.get("messages"):
+            thread_ts = msg_result["messages"][0].get("thread_ts", message_ts)
+    except Exception:
+        thread_ts = message_ts
+
+    if reaction == "white_check_mark":
+        # Execute the confirmed action
+        result_msg = execute_confirmed_action(action)
+        client.chat_postMessage(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            text=f"Done: {result_msg}"
+        )
+    else:  # "x" reaction
+        client.chat_postMessage(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            text="Action cancelled."
+        )
 
 
 def main():

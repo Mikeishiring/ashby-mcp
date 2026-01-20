@@ -13,11 +13,18 @@ import type {
   InterviewStage,
   InterviewPlan,
   InterviewSchedule,
+  Interview,
   Note,
+  User,
+  FeedbackSubmission,
+  ArchiveReason,
+  Offer,
+  OfferStatus,
   PaginatedResponse,
   ApiResponse,
   ApplicationStatus,
   JobStatus,
+  CreateCandidateParams,
 } from "../types/index.js";
 
 interface CacheEntry<T> {
@@ -255,6 +262,25 @@ export class AshbyClient {
     });
   }
 
+  async createApplication(params: {
+    candidateId: string;
+    jobId: string;
+    sourceId?: string;
+    creditedToUserId?: string;
+  }): Promise<Application> {
+    return this.request<Application>("application.create", params);
+  }
+
+  async transferApplication(
+    applicationId: string,
+    jobId: string
+  ): Promise<Application> {
+    return this.request<Application>("application.transfer", {
+      applicationId,
+      jobId,
+    });
+  }
+
   // ===========================================================================
   // Jobs
   // ===========================================================================
@@ -355,6 +381,20 @@ export class AshbyClient {
   }
 
   // ===========================================================================
+  // Users & Team
+  // ===========================================================================
+
+  async listUsers(): Promise<User[]> {
+    const cacheKey = "users:all";
+    const cached = this.getCached<User[]>(cacheKey);
+    if (cached) return cached;
+
+    const results = await this.getAllPaginated<User>("user.list");
+    this.setCache(cacheKey, results, AshbyClient.CACHE_TTL.stages);
+    return results;
+  }
+
+  // ===========================================================================
   // Notes
   // ===========================================================================
 
@@ -379,6 +419,46 @@ export class AshbyClient {
   }
 
   // ===========================================================================
+  // Interview Feedback
+  // ===========================================================================
+
+  async getApplicationFeedback(applicationId: string): Promise<FeedbackSubmission[]> {
+    const result = await this.request<{ feedbackSubmissions: FeedbackSubmission[] }>(
+      "applicationFeedback.list",
+      { applicationId }
+    );
+    return result.feedbackSubmissions ?? [];
+  }
+
+  // ===========================================================================
+  // Archive / Rejection
+  // ===========================================================================
+
+  async listArchiveReasons(): Promise<ArchiveReason[]> {
+    const cacheKey = "archiveReasons:all";
+    const cached = this.getCached<ArchiveReason[]>(cacheKey);
+    if (cached) return cached;
+
+    const result = await this.request<{ archiveReasons: ArchiveReason[] }>(
+      "archiveReason.list",
+      {}
+    );
+    const reasons = result.archiveReasons ?? [];
+    this.setCache(cacheKey, reasons, AshbyClient.CACHE_TTL.stages);
+    return reasons;
+  }
+
+  async archiveApplication(
+    applicationId: string,
+    archiveReasonId: string
+  ): Promise<Application> {
+    return this.request<Application>("application.changeStage", {
+      applicationId,
+      archiveReasonId,
+    });
+  }
+
+  // ===========================================================================
   // Composite Operations
   // ===========================================================================
 
@@ -399,6 +479,270 @@ export class AshbyClient {
       candidate.applicationIds.map((id) => this.getApplication(id))
     );
     return { candidate, applications };
+  }
+
+  // ===========================================================================
+  // Candidate Creation & Updates
+  // ===========================================================================
+
+  async createCandidate(params: CreateCandidateParams): Promise<Candidate> {
+    return this.request<Candidate>("candidate.create", params as unknown as Record<string, unknown>);
+  }
+
+  async updateCandidate(
+    candidateId: string,
+    updates: Partial<CreateCandidateParams>
+  ): Promise<Candidate> {
+    return this.request<Candidate>("candidate.update", {
+      candidateId,
+      ...updates,
+    });
+  }
+
+  async addCandidateTag(candidateId: string, tagId: string): Promise<Candidate> {
+    return this.request<Candidate>("candidate.addTag", {
+      candidateId,
+      tagId,
+    });
+  }
+
+  async listCandidateTags(): Promise<Array<{ id: string; title: string }>> {
+    const response = await this.request<{ candidateTags: Array<{ id: string; title: string }> }>(
+      "candidateTag.list",
+      {}
+    );
+    return response.candidateTags;
+  }
+
+  // ===========================================================================
+  // Interviews
+  // ===========================================================================
+
+  async listInterviews(filters?: {
+    applicationId?: string;
+    userId?: string;
+    startDate?: string;
+    endDate?: string;
+  }): Promise<Interview[]> {
+    return this.getAllPaginated<Interview>("interview.list", filters);
+  }
+
+  async getInterview(interviewId: string): Promise<Interview> {
+    return this.request<Interview>("interview.info", { interviewId });
+  }
+
+  async updateInterviewSchedule(
+    interviewScheduleId: string,
+    interviewEvents: Array<{
+      startTime: string;
+      endTime: string;
+      interviewerIds: string[];
+      location?: string;
+      meetingLink?: string;
+    }>
+  ): Promise<InterviewSchedule> {
+    return this.request<InterviewSchedule>("interviewSchedule.update", {
+      interviewScheduleId,
+      interviewEvents,
+    });
+  }
+
+  async cancelInterviewSchedule(
+    interviewScheduleId: string,
+    cancellationReason?: string
+  ): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>("interviewSchedule.cancel", {
+      interviewScheduleId,
+      cancellationReason,
+    });
+  }
+
+  // ===========================================================================
+  // Feedback
+  // ===========================================================================
+
+  async listFeedbackSubmissions(filters?: {
+    applicationId?: string;
+    interviewId?: string;
+    authorId?: string;
+  }): Promise<FeedbackSubmission[]> {
+    return this.getAllPaginated<FeedbackSubmission>(
+      "feedbackSubmission.list",
+      filters
+    );
+  }
+
+  // ===========================================================================
+  // Offers
+  // ===========================================================================
+
+  async listOffers(filters?: {
+    applicationId?: string;
+    status?: OfferStatus;
+  }): Promise<Offer[]> {
+    return this.getAllPaginated<Offer>("offer.list", filters);
+  }
+
+  async getOffer(offerId: string): Promise<Offer> {
+    return this.request<Offer>("offer.info", { offerId });
+  }
+
+  async createOffer(params: {
+    applicationId: string;
+    offerProcessId: string;
+    startDate: string;
+    salary: number;
+    salaryFrequency?: "Annual" | "Hourly";
+    currency?: string;
+    equity?: number;
+    equityType?: string;
+    signingBonus?: number;
+    relocationBonus?: number;
+    variableCompensation?: number;
+    notes?: string;
+  }): Promise<Offer> {
+    return this.request<Offer>("offer.create", params);
+  }
+
+  async updateOffer(
+    offerId: string,
+    updates: {
+      salary?: number;
+      startDate?: string;
+      equity?: number;
+      signingBonus?: number;
+      relocationBonus?: number;
+      variableCompensation?: number;
+      notes?: string;
+    }
+  ): Promise<Offer> {
+    return this.request<Offer>("offer.update", {
+      offerId,
+      ...updates,
+    });
+  }
+
+  async approveOffer(offerId: string, approverId: string): Promise<Offer> {
+    return this.request<Offer>("offer.approve", {
+      offerId,
+      approverId,
+    });
+  }
+
+  async startOffer(offerId: string): Promise<Offer> {
+    return this.request<Offer>("offer.start", { offerId });
+  }
+
+  async startOfferProcess(
+    applicationId: string,
+    offerProcessId: string
+  ): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>("offerProcess.start", {
+      applicationId,
+      offerProcessId,
+    });
+  }
+
+  // ===========================================================================
+  // Sources
+  // ===========================================================================
+
+  async listSources(): Promise<Array<{ id: string; title: string }>> {
+    const response = await this.request<{ sources: Array<{ id: string; title: string }> }>(
+      "source.list",
+      {}
+    );
+    return response.sources;
+  }
+
+  // ===========================================================================
+  // Hiring Team
+  // ===========================================================================
+
+  async listHiringTeamRoles(): Promise<Array<{ id: string; label: string }>> {
+    const response = await this.request<{ hiringTeamRoles: Array<{ id: string; label: string }> }>(
+      "hiringTeamRole.list",
+      {}
+    );
+    return response.hiringTeamRoles;
+  }
+
+  async listApplicationHiringTeam(applicationId: string): Promise<Array<{
+    userId: string;
+    roleId: string;
+    role: { id: string; label: string };
+  }>> {
+    const response = await this.request<{
+      applicationHiringTeamRoles: Array<{
+        userId: string;
+        roleId: string;
+        role: { id: string; label: string };
+      }>;
+    }>("applicationHiringTeamRole.list", { applicationId });
+    return response.applicationHiringTeamRoles;
+  }
+
+  // ===========================================================================
+  // User Management
+  // ===========================================================================
+
+  async getUser(userId: string): Promise<User> {
+    return this.request<User>("user.info", { userId });
+  }
+
+  async searchUsers(params: { name?: string; email?: string }): Promise<User[]> {
+    return this.request<{ users: User[] }>("user.search", params).then(r => r.users);
+  }
+
+  // ===========================================================================
+  // Feedback & Custom Fields
+  // ===========================================================================
+
+  async getFeedbackSubmission(feedbackSubmissionId: string): Promise<any> {
+    return this.request<any>("feedbackSubmission.info", { feedbackSubmissionId });
+  }
+
+  async listCustomFields(): Promise<Array<{ id: string; title: string; fieldType: string }>> {
+    const response = await this.request<{
+      customFields: Array<{ id: string; title: string; fieldType: string }>;
+    }>("customField.list", {});
+    return response.customFields;
+  }
+
+  // ===========================================================================
+  // Locations & Departments
+  // ===========================================================================
+
+  async listLocations(): Promise<Array<{ id: string; name: string }>> {
+    const response = await this.request<{ locations: Array<{ id: string; name: string }> }>(
+      "location.list",
+      {}
+    );
+    return response.locations;
+  }
+
+  async listDepartments(): Promise<Array<{ id: string; name: string }>> {
+    const response = await this.request<{ departments: Array<{ id: string; name: string }> }>(
+      "department.list",
+      {}
+    );
+    return response.departments;
+  }
+
+  // ===========================================================================
+  // Application History
+  // ===========================================================================
+
+  async getApplicationHistory(applicationId: string): Promise<Array<any>> {
+    const response = await this.request<{ applicationHistory: Array<any> }>(
+      "application.listHistory",
+      { applicationId }
+    );
+    return response.applicationHistory;
+  }
+
+  async listInterviewEvents(interviewScheduleId?: string): Promise<Array<any>> {
+    return this.getAllPaginated<any>("interviewEvent.list", { interviewScheduleId });
   }
 }
 

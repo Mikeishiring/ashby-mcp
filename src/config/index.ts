@@ -49,6 +49,22 @@ const configSchema = z.object({
     channelId: z.string().optional(),
   }),
 
+  // Pipeline alerts configuration
+  pipelineAlerts: z
+    .object({
+      enabled: z.boolean().default(false),
+      time: z.string().default("09:00"), // 24hr format
+      timezone: z.string().default("America/New_York"),
+      channelId: z.string().optional(),
+      thresholds: z
+        .object({
+          stale: z.number().default(3), // Alert if >= N stale candidates
+          needsDecision: z.number().default(2), // Alert if >= N need decisions
+        })
+        .optional(),
+    })
+    .optional(),
+
   // Stale candidate threshold
   staleDays: z.number().default(14),
 });
@@ -87,6 +103,16 @@ export function loadConfig(): Config {
       time: process.env["DAILY_SUMMARY_TIME"] ?? "09:00",
       timezone: process.env["DAILY_SUMMARY_TIMEZONE"] ?? "America/New_York",
       channelId: process.env["DAILY_SUMMARY_CHANNEL"],
+    },
+    pipelineAlerts: {
+      enabled: process.env["PIPELINE_ALERTS_ENABLED"] === "true",
+      time: process.env["PIPELINE_ALERTS_TIME"] ?? "09:00",
+      timezone: process.env["PIPELINE_ALERTS_TIMEZONE"] ?? "America/New_York",
+      channelId: process.env["PIPELINE_ALERTS_CHANNEL"],
+      thresholds: {
+        stale: parseInt(process.env["PIPELINE_ALERTS_STALE_THRESHOLD"] ?? "3", 10),
+        needsDecision: parseInt(process.env["PIPELINE_ALERTS_DECISION_THRESHOLD"] ?? "2", 10),
+      },
     },
     staleDays: parseInt(process.env["STALE_DAYS"] ?? "14", 10),
   };

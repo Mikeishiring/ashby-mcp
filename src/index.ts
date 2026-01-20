@@ -12,7 +12,9 @@ import { AshbyService } from "./ashby/index.js";
 import { ClaudeAgent } from "./ai/index.js";
 import { ConfirmationManager, SafetyGuards } from "./safety/index.js";
 import { SlackBot } from "./slack/index.js";
-import { DailySummaryScheduler } from "./scheduler/index.js";
+import { DailySummaryScheduler, PipelineAlertScheduler } from "./scheduler/index.js";
+import { ReminderManager } from "./reminders/index.js";
+import { TriageSessionManager } from "./triage/index.js";
 
 async function main(): Promise<void> {
   console.log("Starting Ashby Slack Bot...");
@@ -55,16 +57,27 @@ async function main(): Promise<void> {
   const agent = new ClaudeAgent(config, ashby, safety);
   console.log("Claude agent initialized");
 
-  // Initialize Slack bot
-  const bot = new SlackBot(config, agent, confirmations);
+  // Initialize reminder manager
+  const reminders = new ReminderManager(ashby);
+  console.log("Reminder manager initialized");
 
-  // Initialize scheduler
-  const scheduler = new DailySummaryScheduler(config, ashby);
+  // Initialize triage session manager
+  const triageSessions = new TriageSessionManager();
+  console.log("Triage session manager initialized");
+
+  // Initialize Slack bot (pass reminders and triage managers)
+  const bot = new SlackBot(config, agent, confirmations, reminders, triageSessions);
+
+  // Initialize schedulers
+  const dailySummaryScheduler = new DailySummaryScheduler(config, ashby);
+  const pipelineAlertScheduler = new PipelineAlertScheduler(config, ashby);
 
   // Handle graceful shutdown
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`\nReceived ${signal}, shutting down gracefully...`);
-    scheduler.stop();
+    dailySummaryScheduler.stop();
+    pipelineAlertScheduler.stop();
+    triageSessions.shutdown();
     await bot.stop();
     process.exit(0);
   };
@@ -76,14 +89,23 @@ async function main(): Promise<void> {
   try {
     await bot.start();
 
-    // Start the scheduler after bot is running
-    scheduler.start(bot.getClient());
+    // Initialize reminder manager with Slack client
+    reminders.initialize(bot.getClient());
+
+    // Start the schedulers after bot is running
+    dailySummaryScheduler.start(bot.getClient());
+    pipelineAlertScheduler.start(bot.getClient());
 
     console.log("\n✅ Ashby Slack Bot is ready!");
     console.log("   Listening for @mentions in configured channels.");
     if (config.dailySummary.enabled && config.dailySummary.channelId) {
       console.log(
         `   Daily summary scheduled for ${config.dailySummary.time} ${config.dailySummary.timezone}`
+      );
+    }
+    if (config.pipelineAlerts?.enabled && config.pipelineAlerts?.channelId) {
+      console.log(
+        `   Pipeline alerts scheduled for ${config.pipelineAlerts.time} ${config.pipelineAlerts.timezone}`
       );
     }
   } catch (error) {
