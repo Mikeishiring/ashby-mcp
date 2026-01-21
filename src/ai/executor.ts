@@ -101,6 +101,7 @@ export class ToolExecutor {
         }
 
         if (check.requiresConfirmation) {
+          // Return pending confirmation for user to approve
           return {
             success: true,
             requiresConfirmation: true,
@@ -111,9 +112,12 @@ export class ToolExecutor {
             },
           };
         }
+
+        // BATCH_LIMIT mode: execute write operation directly (no confirmation needed)
+        return await this.executeConfirmed(toolName, input, candidateId);
       }
 
-      // Execute the tool
+      // Execute read-only tool
       return await this.executeInternal(toolName, input);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
@@ -650,14 +654,13 @@ export class ToolExecutor {
       }
 
       case "list_feedback_submissions": {
-        // Build filters
-        const filters: {
-          applicationId?: string;
-          interviewId?: string;
-        } = {};
+        // Ashby's applicationFeedback.list requires applicationId
+        let applicationId: string | undefined;
 
-        // Get application ID for the candidate if provided
-        if (input.candidate_id || input.name_or_email) {
+        // Get application ID - either directly or via candidate lookup
+        if (input.application_id) {
+          applicationId = input.application_id;
+        } else if (input.candidate_id || input.name_or_email) {
           const candidateId = await this.resolveCandidateId(input);
           if (!candidateId) {
             return {
@@ -673,15 +676,17 @@ export class ToolExecutor {
               error: "No active application found for candidate.",
             };
           }
-          filters.applicationId = activeApp.id;
+          applicationId = activeApp.id;
         }
 
-        // Add interview filter if provided
-        if (input.interview_id) {
-          filters.interviewId = input.interview_id;
+        if (!applicationId) {
+          return {
+            success: false,
+            error: "applicationId is required. Provide application_id directly or identify a candidate.",
+          };
         }
 
-        const feedback = await this.ashby.listFeedbackSubmissions(filters);
+        const feedback = await this.ashby.listFeedbackSubmissions({ applicationId });
         return { success: true, data: feedback };
       }
 

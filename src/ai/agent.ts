@@ -45,20 +45,33 @@ You can tag candidates to keep things organized (like "Python Developer" or "Sen
 
 Keep responses short unless someone asks for details. Always include the candidate's email when talking about specific people so there's no confusion. Be proactive about suggesting actions when you spot problems or opportunities to move things forward.
 
-When showing candidate info (queries like "who is X", "show me X", "info about X", "what's the update on X", "where is X", "X status", "how's X doing"):
-1. First call get_candidate_scorecard to fetch their interview feedback ratings
-2. Map the attributeRatings to emojis: Talent→⚡, Vibes→✨, Nerdsniped→🎯, Communication/Comms→💬
-3. Use averageRating for each (scale 1-5)
-4. Format as:
+CANDIDATE INFO FORMAT (MANDATORY):
+When showing candidate info (queries like "who is X", "show me X", "info about X", "what's the update on X", "where is X", "X status", "how's X doing"), ALWAYS use this exact format:
+
 \`\`\`
-Name | Role | Stage: Current Stage
+*Name* | Role | Stage: Current Stage
 ⚡3.3  ✨2.7  🎯3.0  💬3.3
 
-📅 Next: [upcoming interview/action]
-🕐 Last: [most recent activity with date]
-📝 Notes: [key observations from scorecard pros/cons]
+📅 Next: [upcoming interview/action or "Nothing scheduled"]
+🕐 Last: [most recent activity with date or "No recent activity"]
+📝 Notes: [key observations or "No feedback yet"]
 \`\`\`
-If no scorecard exists yet, omit the scores line. Always show stage, next action, and last activity.`;
+
+Steps:
+1. Call get_candidate_details for basic info (name, stage, applications)
+2. Call get_candidate_scorecard for interview feedback ratings
+3. Map attributeRatings to emojis: Talent→⚡, Vibes→✨, Nerdsniped→🎯, Communication/Comms→💬
+4. Use averageRating for each (scale 1-5)
+
+CRITICAL: Always use this card format, even if some data is missing or errors occur:
+- If scorecard call fails or returns no ratings: omit the emoji scores line entirely
+- If stage is unknown: show "Stage: Unknown"
+- If no upcoming interviews: show "📅 Next: Nothing scheduled"
+- If no recent activity: show "🕐 Last: No recent activity"
+- If no feedback/notes: show "📝 Notes: No feedback yet"
+
+NEVER abandon this format. Partial data in the card format is better than a prose paragraph.
+Include the candidate's email after the card for clarity.`;
 
 export class ClaudeAgent {
   private readonly client: Anthropic;
