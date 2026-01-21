@@ -59,10 +59,97 @@ export class AshbyService {
   }
 
   async findCandidateByNameOrEmail(
-    query: string
+    query: string,
+    requestingUserId?: string
   ): Promise<Candidate | null> {
     const results = await this.client.searchCandidates(query);
-    return results[0] ?? null;
+
+    if (results.length === 0) return null;
+    if (results.length === 1) return results[0] ?? null;
+
+    // Multiple matches - rank by relevancy
+    const rankedCandidates = await this.rankCandidatesByRelevancy(results, requestingUserId);
+    return rankedCandidates[0] ?? null;
+  }
+
+  /**
+   * Rank candidates by relevancy when multiple matches found.
+   * Scoring factors:
+   * - Active applications score higher than archived
+   * - Later pipeline stages score higher (closer to offer/hire)
+   * - Candidates where requesting user is on hiring team score higher
+   * - More recent activity scores higher
+   */
+  private async rankCandidatesByRelevancy(
+    candidates: Candidate[],
+    requestingUserId?: string
+  ): Promise<Candidate[]> {
+    // Fetch applications for all candidates in parallel
+    const candidatesWithScores = await Promise.all(
+      candidates.map(async (candidate) => {
+        let score = 0;
+
+        try {
+          const { applications } = await this.client.getCandidateWithApplications(candidate.id);
+
+          // Find most relevant application (active preferred, then most recent)
+          const activeApps = applications.filter(a => a.status === "Active");
+          const relevantApp = activeApps[0] ?? applications[0];
+
+          if (relevantApp) {
+            // Active application bonus (+100)
+            if (relevantApp.status === "Active") {
+              score += 100;
+            }
+
+            // Pipeline stage scoring - later stages score higher
+            const stageName = relevantApp.currentInterviewStage?.title?.toLowerCase() ?? "";
+            if (stageName.includes("offer") || stageName.includes("hire")) {
+              score += 50;
+            } else if (stageName.includes("final") || stageName.includes("onsite")) {
+              score += 40;
+            } else if (stageName.includes("technical") || stageName.includes("interview")) {
+              score += 30;
+            } else if (stageName.includes("screen") || stageName.includes("phone")) {
+              score += 20;
+            } else if (stageName.includes("review") || stageName.includes("new")) {
+              score += 10;
+            }
+
+            // Check if requesting user is on hiring team
+            if (requestingUserId && relevantApp.job?.hiringTeam) {
+              const isOnHiringTeam = relevantApp.job.hiringTeam.some(
+                m => m.userId === requestingUserId
+              );
+              if (isOnHiringTeam) {
+                score += 75; // Big bonus for being on their hiring team
+              }
+            }
+
+            // Recency scoring (more recent = higher score)
+            const daysSinceUpdate = Math.floor(
+              (Date.now() - new Date(relevantApp.updatedAt).getTime()) / (1000 * 60 * 60 * 24)
+            );
+            if (daysSinceUpdate < 7) {
+              score += 25;
+            } else if (daysSinceUpdate < 30) {
+              score += 15;
+            } else if (daysSinceUpdate < 90) {
+              score += 5;
+            }
+          }
+        } catch {
+          // If we can't fetch applications, use base score
+        }
+
+        return { candidate, score };
+      })
+    );
+
+    // Sort by score descending
+    candidatesWithScores.sort((a, b) => b.score - a.score);
+
+    return candidatesWithScores.map(c => c.candidate);
   }
 
   // ===========================================================================

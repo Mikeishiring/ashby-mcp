@@ -63,11 +63,30 @@ interface ToolInput {
   feedback_submission_id?: string;
 }
 
+/**
+ * Context about the requesting user (from Slack)
+ */
+export interface UserContext {
+  slackUserId?: string | undefined;
+  ashbyUserId?: string | undefined;
+  email?: string | undefined;
+  name?: string | undefined;
+}
+
 export class ToolExecutor {
+  private userContext?: UserContext;
+
   constructor(
     private readonly ashby: AshbyService,
     private readonly safety: SafetyGuards
   ) {}
+
+  /**
+   * Set user context for relevancy scoring (e.g., from Slack user info)
+   */
+  setUserContext(context: UserContext): void {
+    this.userContext = context;
+  }
 
   /**
    * Execute a tool call
@@ -963,6 +982,7 @@ export class ToolExecutor {
 
   /**
    * Resolve a candidate ID from various input formats
+   * Uses user context for relevancy scoring when multiple matches found
    */
   private async resolveCandidateId(input: ToolInput): Promise<string | null> {
     if (input.candidate_id) {
@@ -970,8 +990,10 @@ export class ToolExecutor {
     }
 
     if (input.name_or_email) {
+      // Pass requesting user's Ashby ID for relevancy scoring
       const candidate = await this.ashby.findCandidateByNameOrEmail(
-        input.name_or_email
+        input.name_or_email,
+        this.userContext?.ashbyUserId
       );
       return candidate?.id ?? null;
     }

@@ -91,6 +91,19 @@ export class ClaudeAgent {
   }
 
   /**
+   * Set user context for relevancy scoring (call before processMessage)
+   * This helps rank candidates when multiple matches are found
+   */
+  setUserContext(context: {
+    slackUserId?: string | undefined;
+    ashbyUserId?: string | undefined;
+    email?: string | undefined;
+    name?: string | undefined;
+  }): void {
+    this.executor.setUserContext(context);
+  }
+
+  /**
    * Process a user message and return a response
    */
   async processMessage(userMessage: string): Promise<AgentResponse> {

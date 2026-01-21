@@ -65,8 +65,8 @@ async function main(): Promise<void> {
   const triageSessions = new TriageSessionManager();
   console.log("Triage session manager initialized");
 
-  // Initialize Slack bot (pass reminders and triage managers)
-  const bot = new SlackBot(config, agent, confirmations, reminders, triageSessions);
+  // Initialize Slack bot (pass ashby service for user context lookup)
+  const bot = new SlackBot(config, agent, ashby, confirmations, reminders, triageSessions);
 
   // Initialize schedulers
   const dailySummaryScheduler = new DailySummaryScheduler(config, ashby);

@@ -7,6 +7,7 @@
 import { App, LogLevel } from "@slack/bolt";
 import type { Config } from "../config/index.js";
 import type { ClaudeAgent, PendingWriteOperation } from "../ai/agent.js";
+import type { AshbyService } from "../ashby/service.js";
 import type { ConfirmationManager } from "../safety/confirmations.js";
 import type { ReminderManager } from "../reminders/index.js";
 import type { TriageSessionManager } from "../triage/index.js";
@@ -15,12 +16,16 @@ import type { MessageContext } from "../types/index.js";
 export class SlackBot {
   private readonly app: App;
   private readonly agent: ClaudeAgent;
+  private readonly ashby: AshbyService;
   private readonly confirmations: ConfirmationManager;
   private readonly triageSessions: TriageSessionManager;
+  // Cache for user context lookups (Slack -> Ashby user mapping)
+  private readonly userContextCache = new Map<string, { ashbyUserId: string | undefined; email: string | undefined; name: string | undefined; cachedAt: number }>();
 
   constructor(
     config: Config,
     agent: ClaudeAgent,
+    ashby: AshbyService,
     confirmations: ConfirmationManager,
     _reminders?: ReminderManager,
     triageSessions?: TriageSessionManager
@@ -33,6 +38,7 @@ export class SlackBot {
     });
 
     this.agent = agent;
+    this.ashby = ashby;
     this.confirmations = confirmations;
     this.triageSessions = triageSessions!;
 
@@ -174,6 +180,9 @@ export class SlackBot {
         timestamp: context.messageTs,
         name: "eyes",
       });
+
+      // Set user context for relevancy scoring
+      await this.setAgentUserContext(context.userId);
 
       // Process with Claude
       const response = await this.agent.processMessage(context.text);
@@ -367,6 +376,65 @@ export class SlackBot {
           text: summaryText,
         });
       }
+    }
+  }
+
+  /**
+   * Set agent user context for relevancy scoring
+   * Looks up Slack user's email and finds their Ashby user ID
+   */
+  private async setAgentUserContext(slackUserId: string): Promise<void> {
+    try {
+      // Check cache first (valid for 10 minutes)
+      const cached = this.userContextCache.get(slackUserId);
+      if (cached && Date.now() - cached.cachedAt < 10 * 60 * 1000) {
+        this.agent.setUserContext({
+          slackUserId,
+          ashbyUserId: cached.ashbyUserId,
+          email: cached.email,
+          name: cached.name,
+        });
+        return;
+      }
+
+      // Look up Slack user info
+      const userInfo = await this.app.client.users.info({ user: slackUserId });
+      const email = userInfo.user?.profile?.email;
+      const name = userInfo.user?.profile?.real_name ?? userInfo.user?.name;
+
+      let ashbyUserId: string | undefined;
+
+      // Try to find matching Ashby user by email
+      if (email) {
+        try {
+          const ashbyUsers = await this.ashby.searchUsers({ email });
+          const firstUser = ashbyUsers[0];
+          if (firstUser) {
+            ashbyUserId = firstUser.id;
+          }
+        } catch {
+          // Ashby user lookup failed - continue without it
+        }
+      }
+
+      // Cache the result
+      this.userContextCache.set(slackUserId, {
+        ashbyUserId,
+        email,
+        name,
+        cachedAt: Date.now(),
+      });
+
+      // Set context on agent
+      this.agent.setUserContext({
+        slackUserId,
+        ashbyUserId,
+        email,
+        name,
+      });
+    } catch (error) {
+      // If we can't get user context, continue without it
+      console.warn(`[SlackBot] Could not get user context for ${slackUserId}:`, error);
     }
   }
 }
