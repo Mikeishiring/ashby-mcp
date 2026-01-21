@@ -309,16 +309,30 @@ export class AshbyClient {
   // Interview Stages
   // ===========================================================================
 
-  async listInterviewStages(jobId?: string): Promise<InterviewStage[]> {
-    const cacheKey = jobId ? `stages:job:${jobId}` : "stages:all";
+  async listInterviewStages(): Promise<InterviewStage[]> {
+    const cacheKey = "stages:all";
     const cached = this.getCached<InterviewStage[]>(cacheKey);
     if (cached) return cached;
 
-    // Use the official interviewStage.list endpoint
-    const params = jobId ? { jobId } : {};
-    const results = await this.getAllPaginated<InterviewStage>("interviewStage.list", params);
+    // Ashby's interviewStage.list requires interviewPlanId - there's no global list endpoint.
+    // We extract unique stages from active applications which include currentInterviewStage.
+    const applications = await this.getAllPaginated<Application>("application.list", { status: "Active" });
+
+    const stageMap = new Map<string, InterviewStage>();
+    for (const app of applications) {
+      if (app.currentInterviewStage && !stageMap.has(app.currentInterviewStage.id)) {
+        stageMap.set(app.currentInterviewStage.id, app.currentInterviewStage);
+      }
+    }
+
+    const results = Array.from(stageMap.values());
     this.setCache(cacheKey, results, AshbyClient.CACHE_TTL.stages);
     return results;
+  }
+
+  async listInterviewStagesForPlan(interviewPlanId: string): Promise<InterviewStage[]> {
+    // Use the official interviewStage.list endpoint (requires interviewPlanId)
+    return this.getAllPaginated<InterviewStage>("interviewStage.list", { interviewPlanId });
   }
 
   async getInterviewStage(stageId: string): Promise<InterviewStage | null> {
