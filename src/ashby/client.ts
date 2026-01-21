@@ -309,31 +309,25 @@ export class AshbyClient {
   // Interview Stages
   // ===========================================================================
 
-  async listInterviewStages(): Promise<InterviewStage[]> {
-    const cacheKey = "stages:all";
+  async listInterviewStages(jobId?: string): Promise<InterviewStage[]> {
+    const cacheKey = jobId ? `stages:job:${jobId}` : "stages:all";
     const cached = this.getCached<InterviewStage[]>(cacheKey);
     if (cached) return cached;
 
-    // Ashby API doesn't have a global interviewStage.list endpoint.
-    // We extract unique stages from active applications which include currentInterviewStage.
-    const applications = await this.getAllPaginated<Application>("application.list", { status: "Active" });
-
-    const stageMap = new Map<string, InterviewStage>();
-    for (const app of applications) {
-      if (app.currentInterviewStage && !stageMap.has(app.currentInterviewStage.id)) {
-        stageMap.set(app.currentInterviewStage.id, app.currentInterviewStage);
-      }
-    }
-
-    const results = Array.from(stageMap.values());
+    // Use the official interviewStage.list endpoint
+    const params = jobId ? { jobId } : {};
+    const results = await this.getAllPaginated<InterviewStage>("interviewStage.list", params);
     this.setCache(cacheKey, results, AshbyClient.CACHE_TTL.stages);
     return results;
   }
 
   async getInterviewStage(stageId: string): Promise<InterviewStage | null> {
-    // Get stage from the cached list
-    const stages = await this.listInterviewStages();
-    return stages.find(s => s.id === stageId) ?? null;
+    // Use the official interviewStage.info endpoint
+    try {
+      return await this.request<InterviewStage>("interviewStage.info", { interviewStageId: stageId });
+    } catch {
+      return null;
+    }
   }
 
   // ===========================================================================
@@ -359,9 +353,10 @@ export class AshbyClient {
     interviewEvents: Array<{
       startTime: string;
       endTime: string;
-      interviewerIds: string[];
+      interviewers: Array<{ email: string; feedbackRequired?: boolean }>;
       location?: string;
       meetingLink?: string;
+      interviewId?: string;
     }>
   ): Promise<InterviewSchedule> {
     return this.request<InterviewSchedule>("interviewSchedule.create", {
@@ -475,9 +470,23 @@ export class AshbyClient {
     applications: Application[];
   }> {
     const candidate = await this.getCandidate(candidateId);
-    const applications = await Promise.all(
+
+    // Use allSettled to handle individual application failures gracefully
+    // (e.g., if an application was deleted or access is restricted)
+    const results = await Promise.allSettled(
       candidate.applicationIds.map((id) => this.getApplication(id))
     );
+
+    const applications = results
+      .filter((r): r is PromiseFulfilledResult<Application> => r.status === "fulfilled")
+      .map((r) => r.value);
+
+    // Log any failures for debugging but don't crash
+    const failures = results.filter((r) => r.status === "rejected");
+    if (failures.length > 0) {
+      console.warn(`[Ashby] Failed to fetch ${failures.length} application(s) for candidate ${candidateId}`);
+    }
+
     return { candidate, applications };
   }
 
@@ -536,9 +545,10 @@ export class AshbyClient {
     interviewEvents: Array<{
       startTime: string;
       endTime: string;
-      interviewerIds: string[];
+      interviewers: Array<{ email: string; feedbackRequired?: boolean }>;
       location?: string;
       meetingLink?: string;
+      interviewEventId?: string;
     }>
   ): Promise<InterviewSchedule> {
     return this.request<InterviewSchedule>("interviewSchedule.update", {
@@ -563,13 +573,17 @@ export class AshbyClient {
 
   async listFeedbackSubmissions(filters?: {
     applicationId?: string;
-    interviewId?: string;
-    authorId?: string;
   }): Promise<FeedbackSubmission[]> {
-    return this.getAllPaginated<FeedbackSubmission>(
-      "feedbackSubmission.list",
-      filters
+    // Note: Ashby API uses applicationFeedback.list, not feedbackSubmission.list
+    // The endpoint requires applicationId and returns feedback for that application
+    if (!filters?.applicationId) {
+      throw new Error("applicationId is required for listing feedback submissions");
+    }
+    const result = await this.request<{ feedbackSubmissions: FeedbackSubmission[] }>(
+      "applicationFeedback.list",
+      { applicationId: filters.applicationId }
     );
+    return result.feedbackSubmissions ?? [];
   }
 
   // ===========================================================================
