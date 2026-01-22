@@ -611,8 +611,17 @@ export class ToolExecutor {
           return { success: false, error: check.reason ?? "Access denied" };
         }
 
-        const context = await this.ashby.getCandidateFullContext(candidateId);
-        return { success: true, data: context };
+        try {
+          const context = await this.ashby.getCandidateFullContext(candidateId);
+          return { success: true, data: context };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Unknown error";
+          console.error(`[Executor] get_candidate_details failed for ${candidateId}:`, error);
+          return {
+            success: false,
+            error: `Failed to get candidate details: ${message}`,
+          };
+        }
       }
 
       case "get_open_jobs": {
@@ -986,16 +995,28 @@ export class ToolExecutor {
    */
   private async resolveCandidateId(input: ToolInput): Promise<string | null> {
     if (input.candidate_id) {
+      console.log(`[Executor] Using provided candidate_id: ${input.candidate_id}`);
       return input.candidate_id;
     }
 
     if (input.name_or_email) {
-      // Pass requesting user's Ashby ID for relevancy scoring
-      const candidate = await this.ashby.findCandidateByNameOrEmail(
-        input.name_or_email,
-        this.userContext?.ashbyUserId
-      );
-      return candidate?.id ?? null;
+      console.log(`[Executor] Resolving candidate by name/email: ${input.name_or_email}`);
+      try {
+        // Pass requesting user's Ashby ID for relevancy scoring
+        const candidate = await this.ashby.findCandidateByNameOrEmail(
+          input.name_or_email,
+          this.userContext?.ashbyUserId
+        );
+        if (candidate) {
+          console.log(`[Executor] Resolved to candidate: ${candidate.name} (${candidate.id})`);
+        } else {
+          console.log(`[Executor] No candidate found for: ${input.name_or_email}`);
+        }
+        return candidate?.id ?? null;
+      } catch (error) {
+        console.error(`[Executor] Error resolving candidate:`, error);
+        return null;
+      }
     }
 
     return null;

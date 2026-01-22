@@ -84,6 +84,8 @@ export class AshbyService {
     candidates: Candidate[],
     requestingUserId?: string
   ): Promise<Candidate[]> {
+    console.log(`[Service] Ranking ${candidates.length} candidates by relevancy (user: ${requestingUserId ?? "none"})`);
+
     // Fetch applications for all candidates in parallel
     const candidatesWithScores = await Promise.all(
       candidates.map(async (candidate) => {
@@ -137,9 +139,12 @@ export class AshbyService {
             } else if (daysSinceUpdate < 90) {
               score += 5;
             }
+
+            console.log(`[Service] Candidate ${candidate.name} (${candidate.id}): score=${score}, stage="${stageName}", status=${relevantApp.status}`);
           }
-        } catch {
+        } catch (error) {
           // If we can't fetch applications, use base score
+          console.warn(`[Service] Could not fetch applications for candidate ${candidate.id}:`, error);
         }
 
         return { candidate, score };
@@ -148,6 +153,8 @@ export class AshbyService {
 
     // Sort by score descending
     candidatesWithScores.sort((a, b) => b.score - a.score);
+
+    console.log(`[Service] Top ranked candidate: ${candidatesWithScores[0]?.candidate.name} (score: ${candidatesWithScores[0]?.score})`);
 
     return candidatesWithScores.map(c => c.candidate);
   }
@@ -161,6 +168,8 @@ export class AshbyService {
     applications: ApplicationWithContext[];
     notes: Note[];
   }> {
+    console.log(`[Service] Getting full context for candidate: ${candidateId}`);
+
     // Use Promise.allSettled for resilience - partial data is better than no data
     const [candidateResult, notesResult, stagesResult, jobsResult] = await Promise.allSettled([
       this.client.getCandidateWithApplications(candidateId),
@@ -171,9 +180,11 @@ export class AshbyService {
 
     // Candidate data is required - throw if it fails
     if (candidateResult.status === "rejected") {
+      console.error(`[Service] Failed to get candidate ${candidateId}:`, candidateResult.reason);
       throw candidateResult.reason;
     }
     const { candidate, applications } = candidateResult.value;
+    console.log(`[Service] Got candidate: ${candidate.name} with ${applications.length} applications`);
 
     // Notes, stages, and jobs are optional - use empty arrays on failure
     const notes = notesResult.status === "fulfilled" ? notesResult.value : [];
