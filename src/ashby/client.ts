@@ -517,10 +517,14 @@ export class AshbyClient {
   // ===========================================================================
 
   async getApplicationFeedback(applicationId: string): Promise<FeedbackSubmission[]> {
-    const result = await this.request<{ feedbackSubmissions: FeedbackSubmission[] }>(
-      "applicationFeedback.list",
-      { applicationId }
-    );
+    const result = await this.request<
+      FeedbackSubmission[] | { feedbackSubmissions?: FeedbackSubmission[] }
+    >("applicationFeedback.list", { applicationId });
+
+    if (Array.isArray(result)) {
+      return result;
+    }
+
     return result.feedbackSubmissions ?? [];
   }
 

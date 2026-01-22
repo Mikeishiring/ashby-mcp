@@ -86,8 +86,24 @@ const info = (message: string) => {
   console.log(`[info] ${message}`);
 };
 
-const summarizeSubmission = async (submissionId: string) => {
-  const detail = await service.getFeedbackDetails(submissionId);
+const summarizeSubmission = async (submission: FeedbackSubmission | string) => {
+  let detail: FeedbackSubmission | null = null;
+
+  if (typeof submission === "string") {
+    try {
+      detail = await service.getFeedbackDetails(submission);
+    } catch (error) {
+      warn(
+        `submission ${submission} details unavailable (${error instanceof Error ? error.message : "unknown error"})`
+      );
+      return null;
+    }
+  } else {
+    detail = submission;
+  }
+
+  if (!detail) return null;
+
   const submittedBy = detail.submittedByUser
     ? `${detail.submittedByUser.firstName} ${detail.submittedByUser.lastName}`.trim()
     : detail.submittedBy?.name ?? "Unknown";
@@ -192,7 +208,7 @@ const run = async () => {
 
     const detailTargets = feedbackSubmissions.slice(0, limit);
     for (const submission of detailTargets) {
-      await summarizeSubmission(submission.id);
+      await summarizeSubmission(submission);
     }
   }
 
@@ -200,7 +216,7 @@ const run = async () => {
     const feedbackSubmissions = await client.listFeedbackSubmissions({ interviewId });
     info(`feedbackSubmission.list (interviewId) returned ${feedbackSubmissions.length} submissions`);
     for (const submission of feedbackSubmissions.slice(0, limit)) {
-      await summarizeSubmission(submission.id);
+      await summarizeSubmission(submission);
     }
   }
 };
