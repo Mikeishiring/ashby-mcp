@@ -5,7 +5,7 @@
  * Handles business logic like stale candidate detection and pipeline summaries.
  */
 
-import { AshbyClient } from "./client.js";
+import { AshbyApiError, AshbyClient } from "./client.js";
 import type { Config } from "../config/index.js";
 import type {
   Application,
@@ -44,10 +44,12 @@ import type {
 export class AshbyService {
   private readonly client: AshbyClient;
   private readonly staleDays: number;
+  private readonly feedbackSubmissionCache: Map<string, FeedbackSubmission>;
 
   constructor(config: Config) {
     this.client = new AshbyClient(config);
     this.staleDays = config.staleDays;
+    this.feedbackSubmissionCache = new Map();
   }
 
   // ===========================================================================
@@ -1023,7 +1025,13 @@ export class AshbyService {
     interviewId?: string;
     authorId?: string;
   }): Promise<FeedbackSubmission[]> {
-    return this.client.listFeedbackSubmissions(filters);
+    const submissions = await this.client.listFeedbackSubmissions(filters);
+    for (const submission of submissions) {
+      if (submission?.id) {
+        this.feedbackSubmissionCache.set(submission.id, submission);
+      }
+    }
+    return submissions;
   }
 
   // ===========================================================================
@@ -1852,11 +1860,27 @@ export class AshbyService {
   // ===========================================================================
 
   async getFeedbackDetails(feedbackSubmissionId: string): Promise<FeedbackSubmission> {
-    const submission = await this.client.getFeedbackSubmission(feedbackSubmissionId);
-    if (!submission.fieldSubmissions || submission.fieldSubmissions.length === 0) {
-      submission.fieldSubmissions = this.buildFieldSubmissions(submission);
+    try {
+      const submission = await this.client.getFeedbackSubmission(feedbackSubmissionId);
+      if (!submission.fieldSubmissions || submission.fieldSubmissions.length === 0) {
+        submission.fieldSubmissions = this.buildFieldSubmissions(submission);
+      }
+      if (submission.id) {
+        this.feedbackSubmissionCache.set(submission.id, submission);
+      }
+      return submission;
+    } catch (error) {
+      if (error instanceof AshbyApiError && error.statusCode === 404) {
+        const cached = this.feedbackSubmissionCache.get(feedbackSubmissionId);
+        if (cached) {
+          if (!cached.fieldSubmissions || cached.fieldSubmissions.length === 0) {
+            cached.fieldSubmissions = this.buildFieldSubmissions(cached);
+          }
+          return cached;
+        }
+      }
+      throw error;
     }
-    return submission;
   }
 
   async listCustomFields(): Promise<Array<{ id: string; title: string; fieldType: string }>> {
