@@ -353,7 +353,7 @@ export interface PaginatedResponse<T> {
 export interface ApiResponse<T> {
   success: boolean;
   results?: T;
-  errors?: ApiError[];
+  errors?: Array<ApiError | string>;
 }
 
 export interface ApiError {

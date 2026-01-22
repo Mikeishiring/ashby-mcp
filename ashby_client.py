@@ -178,7 +178,7 @@ class AshbyClient:
     def get_candidate_by_id(self, candidate_id: str) -> Optional[Dict]:
         """Get detailed candidate information."""
         try:
-            response = self._post("candidate.info", {"candidateId": candidate_id})
+            response = self._post("candidate.info", {"id": candidate_id})
             if response.get("success"):
                 return response.get("results")
         except:

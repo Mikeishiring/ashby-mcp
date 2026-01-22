@@ -155,7 +155,7 @@ export class AshbyClient {
       const data = (await response.json()) as ApiResponse<T>;
 
       if (!data.success) {
-        const errors = data.errors?.map((e) => e.message).join(", ") ?? "Unknown error";
+        const errors = this.formatErrors(data.errors);
         console.error(`[Ashby] API returned error: ${errors}`);
         throw new AshbyApiError(`Ashby API returned error: ${errors}`, 400);
       }
@@ -217,11 +217,11 @@ export class AshbyClient {
       results: T[];
       moreDataAvailable: boolean;
       nextCursor?: string;
-      errors?: Array<{ message: string }>;
+      errors?: Array<{ message: string } | string>;
     };
 
     if (!data.success) {
-      const errors = data.errors?.map((e) => e.message).join(", ") ?? "Unknown error";
+      const errors = this.formatErrors(data.errors);
       console.error(`[Ashby] API returned error: ${errors}`);
       throw new AshbyApiError(`Ashby API returned error: ${errors}`, 400);
     }
@@ -254,6 +254,19 @@ export class AshbyClient {
     });
   }
 
+  private formatErrors(errors?: Array<{ message?: string } | string>): string {
+    if (!errors) return "Unknown error";
+    const messages = errors
+      .map((error) => {
+        if (typeof error === "string") return error;
+        if (error && typeof error.message === "string") return error.message;
+        return "";
+      })
+      .map((message) => message.trim())
+      .filter((message) => message.length > 0);
+    return messages.length > 0 ? messages.join(", ") : "Unknown error";
+  }
+
   clearCache(): void {
     this.cache.clear();
   }
@@ -270,7 +283,7 @@ export class AshbyClient {
   }
 
   async getCandidate(candidateId: string): Promise<Candidate> {
-    return this.request<Candidate>("candidate.info", { candidateId });
+    return this.request<Candidate>("candidate.info", { id: candidateId });
   }
 
   async listCandidates(): Promise<Candidate[]> {
@@ -662,10 +675,65 @@ export class AshbyClient {
     interviewId?: string;
     authorId?: string;
   }): Promise<FeedbackSubmission[]> {
-    return this.getAllPaginated<FeedbackSubmission>(
-      "feedbackSubmission.list",
-      filters
-    );
+    try {
+      return await this.getAllPaginated<FeedbackSubmission>(
+        "feedbackSubmission.list",
+        filters
+      );
+    } catch (error) {
+      if (error instanceof AshbyApiError && error.statusCode === 404) {
+        const fallback = await this.listFeedbackSubmissionsFallback(filters);
+        if (fallback) {
+          return fallback;
+        }
+      }
+      throw error;
+    }
+  }
+
+  private async listFeedbackSubmissionsFallback(filters?: {
+    applicationId?: string;
+    interviewId?: string;
+    authorId?: string;
+  }): Promise<FeedbackSubmission[] | null> {
+    if (!filters) {
+      console.warn("[Ashby] feedbackSubmission.list unavailable; no filters provided for fallback.");
+      return [];
+    }
+
+    let applicationId = filters.applicationId;
+    if (!applicationId && filters.interviewId) {
+      try {
+        const interview = await this.getInterview(filters.interviewId);
+        applicationId = interview.applicationId;
+      } catch (error) {
+        console.warn("[Ashby] Failed to resolve applicationId for interviewId fallback.", error);
+        return [];
+      }
+    }
+
+    if (!applicationId) {
+      console.warn("[Ashby] feedbackSubmission.list unavailable; missing applicationId for fallback.");
+      return [];
+    }
+
+    try {
+      let submissions = await this.getApplicationFeedback(applicationId);
+      if (filters.interviewId) {
+        submissions = submissions.filter(
+          (submission) => submission.interviewId === filters.interviewId
+        );
+      }
+      if (filters.authorId) {
+        submissions = submissions.filter(
+          (submission) => submission.submittedByUser?.id === filters.authorId
+        );
+      }
+      return submissions;
+    } catch (error) {
+      console.warn("[Ashby] applicationFeedback.list fallback failed.", error);
+      return [];
+    }
   }
 
   // ===========================================================================
@@ -795,7 +863,20 @@ export class AshbyClient {
   // ===========================================================================
 
   async getFeedbackSubmission(feedbackSubmissionId: string): Promise<FeedbackSubmission> {
-    return this.request<FeedbackSubmission>("feedbackSubmission.info", { feedbackSubmissionId });
+    try {
+      return await this.request<FeedbackSubmission>("feedbackSubmission.info", {
+        feedbackSubmissionId,
+      });
+    } catch (error) {
+      if (error instanceof AshbyApiError && error.statusCode === 404) {
+        throw new AshbyApiError(
+          "feedbackSubmission.info is not available for this Ashby account. Use applicationFeedback.list instead.",
+          error.statusCode,
+          error.responseBody
+        );
+      }
+      throw error;
+    }
   }
 
   async listCustomFields(): Promise<Array<{ id: string; title: string; fieldType: string }>> {

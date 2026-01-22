@@ -18,7 +18,7 @@
 | Interview Stages | 2 | 0 | 0% |
 | Offers | 7 | 7 | 100% |
 | Users | 5 | 3 | 60% |
-| Feedback | 4 | 3 | 75% |
+| Feedback | 4 | 1 | 25% |
 | Archive Reasons | 1 | 1 | 100% |
 | Hiring Teams | 4 | 2 | 50% |
 | Sources | 2 | 1 | 50% |
@@ -33,7 +33,7 @@
 | Job Postings | 3 | 0 | 0% |
 | Assessments | 5 | 0 | 0% |
 | Other (admin) | ~25 | 0 | 0% |
-| **TOTAL** | **~145** | **45** | **~31%** |
+| **TOTAL** | **~145** | **43** | **~30%** |
 
 ---
 
@@ -68,6 +68,8 @@
 | `candidate.removeTag` | ❌ | 🟡 | Remove tag from candidate |
 
 **Coverage: 8/15 (53%)**
+
+**Note:** `candidate.info` expects `{ id }` in the request body. Using `{ candidateId }` returns `invalid_input`.
 
 ---
 
@@ -192,10 +194,10 @@
 |----------|--------|----------|-------|
 | `applicationFeedback.list` | ✅ | - | List feedback for app |
 | `applicationFeedback.submit` | ❌ | 🟡 | Submit feedback |
-| `feedbackSubmission.list` | ✅ | - | List submissions |
-| `feedbackSubmission.info` | ✅ | - | Get submission details |
+| `feedbackSubmission.list` | ⚠️ | - | Returns 404 in this Ashby account; fallback to `applicationFeedback.list` when possible |
+| `feedbackSubmission.info` | ⚠️ | - | Returns 404 in this Ashby account; no reliable fallback by ID |
 
-**Coverage: 3/4 (75%)**
+**Coverage: 1/4 (25%)**
 
 ---
 
