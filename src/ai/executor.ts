@@ -6,7 +6,7 @@
 
 import type { AshbyService } from "../ashby/service.js";
 import type { SafetyGuards } from "../safety/guards.js";
-import type { ToolResult, Application } from "../types/index.js";
+import type { ToolResult, CreateCandidateParams, OfferStatus } from "../types/index.js";
 import { isWriteTool } from "./tools.js";
 
 interface ToolInput {
@@ -17,6 +17,8 @@ interface ToolInput {
   job_title?: string;
   candidate_id?: string;
   candidate_ids?: string[];
+  candidate_name?: string;
+  candidate_email?: string;
   name_or_email?: string;
   content?: string;
   target_stage?: string;
@@ -40,6 +42,7 @@ interface ToolInput {
   equity?: number;
   signing_bonus?: number;
   relocation_bonus?: number;
+  variable_compensation?: number;
   notes?: string;
   approver_id?: string;
   // Phase 1: Interviews
@@ -76,8 +79,19 @@ export class ToolExecutor {
     try {
       // Check if write operation needs confirmation
       if (isWriteTool(toolName)) {
-        const candidateId = await this.resolveCandidateId(input);
-        if (!candidateId) {
+        const requiresCandidate = this.writeToolRequiresCandidate(toolName);
+        const shouldResolveCandidate =
+          requiresCandidate ||
+          input.candidate_id !== undefined ||
+          input.name_or_email !== undefined ||
+          input.candidate_name !== undefined ||
+          input.candidate_email !== undefined;
+
+        const candidateId = shouldResolveCandidate
+          ? await this.resolveCandidateId(input)
+          : null;
+
+        if (requiresCandidate && !candidateId) {
           return {
             success: false,
             error: "Could not identify candidate. Please provide a name, email, or candidate ID.",
@@ -93,19 +107,22 @@ export class ToolExecutor {
 
         const check = await this.safety.checkWriteOperation({
           type: operationType,
-          candidateIds: [candidateId],
+          candidateIds: candidateId ? [candidateId] : [],
         });
 
         if (!check.allowed) {
           return { success: false, error: check.reason ?? "Operation not allowed" };
         }
 
-        if (check.requiresConfirmation) {
+        const requiresConfirmation =
+          toolName === "set_reminder" ? true : check.requiresConfirmation;
+
+        if (requiresConfirmation) {
           return {
             success: true,
             requiresConfirmation: true,
             data: {
-              candidateId,
+              ...(candidateId ? { candidateId } : {}),
               toolName,
               input,
             },
@@ -127,11 +144,20 @@ export class ToolExecutor {
   async executeConfirmed(
     toolName: string,
     input: ToolInput,
-    candidateId: string
+    candidateId?: string
   ): Promise<ToolResult> {
     try {
+      if (this.writeToolRequiresCandidate(toolName) && !candidateId) {
+        return {
+          success: false,
+          error: "Missing candidate context for this operation. Please provide a name, email, or candidate ID.",
+        };
+      }
+
+      const resolvedCandidateId = candidateId ?? "";
+
       if (toolName === "add_note") {
-        const note = await this.ashby.addNote(candidateId, input.content ?? "");
+        const note = await this.ashby.addNote(resolvedCandidateId, input.content ?? "");
         return {
           success: true,
           data: { note, message: "Note added successfully." },
@@ -148,8 +174,10 @@ export class ToolExecutor {
         }
 
         // Get the application ID from the candidate
-        const { applications } = await this.ashby.getCandidateFullContext(candidateId);
-        const activeApp = applications.find((a) => a.status === "Active");
+        const activeApp = await this.ashby.getActiveApplicationForCandidate(
+          resolvedCandidateId,
+          input.application_id
+        );
         if (!activeApp) {
           return {
             success: false,
@@ -176,12 +204,13 @@ export class ToolExecutor {
         }
 
         const schedule = await this.ashby.scheduleInterview(
-          candidateId,
+          resolvedCandidateId,
           input.start_time,
           input.end_time,
           input.interviewer_ids,
           input.meeting_link,
-          input.location
+          input.location,
+          input.application_id
         );
 
         return {
@@ -201,7 +230,11 @@ export class ToolExecutor {
           };
         }
 
-        const result = await this.ashby.rejectCandidate(candidateId, input.archive_reason_id);
+        const result = await this.ashby.rejectCandidate(
+          resolvedCandidateId,
+          input.archive_reason_id,
+          input.application_id
+        );
         return {
           success: true,
           data: {
@@ -217,11 +250,118 @@ export class ToolExecutor {
         return {
           success: true,
           data: {
-            candidateId,
+            candidateId: resolvedCandidateId,
             remindIn: input.remind_in,
             note: input.note,
             message: "Reminder will be scheduled.",
             requiresSlackScheduling: true,
+          },
+        };
+      }
+
+      if (toolName === "create_candidate") {
+        if (!input.name || !input.email) {
+          return {
+            success: false,
+            error: "Missing required fields: name, email",
+          };
+        }
+
+        const params: CreateCandidateParams = {
+          name: input.name,
+          email: input.email,
+          ...(input.phone_number ? { phoneNumber: input.phone_number } : {}),
+          ...(input.linkedin_url
+            ? { socialLinks: [{ url: input.linkedin_url, type: "LinkedIn" }] }
+            : {}),
+          ...(input.tags ? { tags: input.tags } : {}),
+          ...(input.source_id ? { source: { sourceId: input.source_id } } : {}),
+        };
+
+        const candidate = await this.ashby.createCandidate(params);
+
+        return {
+          success: true,
+          data: {
+            candidate,
+            message: `Candidate created successfully: ${candidate.name} (${candidate.primaryEmailAddress?.value})`,
+          },
+        };
+      }
+
+      if (toolName === "apply_to_job") {
+        const jobId = await this.resolveJobId(input);
+        if (!jobId) {
+          return {
+            success: false,
+            error: "Could not identify job. Please provide a job title or job ID.",
+          };
+        }
+
+        const params: { candidateId: string; jobId: string; sourceId?: string } = {
+          candidateId: resolvedCandidateId,
+          jobId,
+        };
+        if (input.source_id) {
+          params.sourceId = input.source_id;
+        }
+
+        const application = await this.ashby.createApplication(params);
+
+        return {
+          success: true,
+          data: {
+            application,
+            message: "Application created successfully for candidate.",
+          },
+        };
+      }
+
+      if (toolName === "transfer_application") {
+        const activeApp = await this.ashby.getActiveApplicationForCandidate(
+          resolvedCandidateId,
+          input.application_id
+        );
+        if (!activeApp) {
+          return {
+            success: false,
+            error: "No active application found for candidate.",
+          };
+        }
+
+        const jobId = await this.resolveJobId(input);
+        if (!jobId) {
+          return {
+            success: false,
+            error: "Could not identify job. Please provide a job title or job ID.",
+          };
+        }
+
+        const application = await this.ashby.transferApplication(activeApp.id, jobId);
+
+        return {
+          success: true,
+          data: {
+            application,
+            message: "Application transferred successfully to new job.",
+          },
+        };
+      }
+
+      if (toolName === "add_candidate_tag") {
+        if (!input.tag_id) {
+          return {
+            success: false,
+            error: "Missing required field: tag_id. Use list_candidate_tags to see available tags.",
+          };
+        }
+
+        const candidate = await this.ashby.addCandidateTag(resolvedCandidateId, input.tag_id);
+        return {
+          success: true,
+          data: {
+            candidate,
+            message: "Tag added successfully.",
           },
         };
       }
@@ -239,7 +379,8 @@ export class ToolExecutor {
         }
 
         const offer = await this.ashby.createOffer({
-          candidateId,
+          candidateId: resolvedCandidateId,
+          ...(input.application_id ? { applicationId: input.application_id } : {}),
           offerProcessId: input.offer_process_id,
           startDate: input.start_date,
           salary: input.salary,
@@ -248,6 +389,7 @@ export class ToolExecutor {
           ...(input.equity !== undefined && { equity: input.equity }),
           ...(input.signing_bonus !== undefined && { signingBonus: input.signing_bonus }),
           ...(input.relocation_bonus !== undefined && { relocationBonus: input.relocation_bonus }),
+          ...(input.variable_compensation !== undefined && { variableCompensation: input.variable_compensation }),
           ...(input.notes && { notes: input.notes }),
         });
 
@@ -265,12 +407,21 @@ export class ToolExecutor {
           return { success: false, error: "Missing required field: offer_id" };
         }
 
-        const updates: any = {};
+        const updates: {
+          salary?: number;
+          startDate?: string;
+          equity?: number;
+          signingBonus?: number;
+          relocationBonus?: number;
+          variableCompensation?: number;
+          notes?: string;
+        } = {};
         if (input.salary !== undefined) updates.salary = input.salary;
         if (input.start_date) updates.startDate = input.start_date;
         if (input.equity !== undefined) updates.equity = input.equity;
         if (input.signing_bonus !== undefined) updates.signingBonus = input.signing_bonus;
         if (input.relocation_bonus !== undefined) updates.relocationBonus = input.relocation_bonus;
+        if (input.variable_compensation !== undefined) updates.variableCompensation = input.variable_compensation;
         if (input.notes) updates.notes = input.notes;
 
         const offer = await this.ashby.updateOffer(input.offer_id, updates);
@@ -380,20 +531,16 @@ export class ToolExecutor {
           };
         }
 
-        const params: any = {
+        const params: CreateCandidateParams = {
           name: input.name,
           email: input.email,
+          ...(input.phone_number ? { phoneNumber: input.phone_number } : {}),
+          ...(input.linkedin_url
+            ? { socialLinks: [{ url: input.linkedin_url, type: "LinkedIn" }] }
+            : {}),
+          ...(input.tags ? { tags: input.tags } : {}),
+          ...(input.source_id ? { source: { sourceId: input.source_id } } : {}),
         };
-
-        if (input.phone_number) params.phoneNumber = input.phone_number;
-        if (input.linkedin_url) {
-          params.socialLinks = [{
-            url: input.linkedin_url,
-            type: "LinkedIn",
-          }];
-        }
-        if (input.tags) params.tags = input.tags;
-        if (input.source_id) params.source = { sourceId: input.source_id };
 
         const candidate = await this.ashby.createCandidate(params);
 
@@ -456,8 +603,10 @@ export class ToolExecutor {
         }
 
         // Get the active application
-        const { applications } = await this.ashby.getCandidateWithApplications(candidateId);
-        const activeApp = applications.find((a: Application) => a.status === "Active");
+        const activeApp = await this.ashby.getActiveApplicationForCandidate(
+          candidateId,
+          input.application_id
+        );
         if (!activeApp) {
           return {
             success: false,
@@ -559,7 +708,14 @@ export class ToolExecutor {
           return { success: false, error: "Search query is required" };
         }
         const candidates = await this.ashby.searchCandidates(input.query);
-        return { success: true, data: candidates };
+        const filtered: typeof candidates = [];
+        for (const candidate of candidates) {
+          const check = await this.safety.checkReadOperation(candidate.id);
+          if (check.allowed) {
+            filtered.push(candidate);
+          }
+        }
+        return { success: true, data: filtered };
       }
 
       case "get_candidates_for_job": {
@@ -575,19 +731,13 @@ export class ToolExecutor {
       }
 
       case "get_candidate_details": {
-        const candidateId = await this.resolveCandidateId(input);
+        const candidateId = await this.resolveReadableCandidateId(input);
         if (!candidateId) {
           return {
             success: false,
             error: "Could not identify candidate. Please provide a name, email, or candidate ID.",
           };
         }
-
-        const check = await this.safety.checkReadOperation(candidateId);
-        if (!check.allowed) {
-          return { success: false, error: check.reason ?? "Access denied" };
-        }
-
         const context = await this.ashby.getCandidateFullContext(candidateId);
         return { success: true, data: context };
       }
@@ -615,7 +765,7 @@ export class ToolExecutor {
       }
 
       case "get_interview_schedules": {
-        const candidateId = await this.resolveCandidateId(input);
+        const candidateId = await this.resolveReadableCandidateId(input);
         if (!candidateId) {
           return {
             success: false,
@@ -638,14 +788,14 @@ export class ToolExecutor {
       // =========================================================================
 
       case "get_candidate_scorecard": {
-        const candidateId = await this.resolveCandidateId(input);
+        const candidateId = await this.resolveReadableCandidateId(input);
         if (!candidateId) {
           return {
             success: false,
             error: "Could not identify candidate. Please provide a name, email, or candidate ID.",
           };
         }
-        const scorecard = await this.ashby.getCandidateScorecard(candidateId);
+        const scorecard = await this.ashby.getCandidateScorecard(candidateId, input.application_id);
         return { success: true, data: scorecard };
       }
 
@@ -656,17 +806,31 @@ export class ToolExecutor {
           interviewId?: string;
         } = {};
 
+        if (input.application_id && !this.hasCandidateInput(input)) {
+          const application = await this.ashby.getApplication(input.application_id);
+          const check = await this.safety.checkReadOperation(application.candidateId);
+          if (!check.allowed) {
+            return {
+              success: false,
+              error: check.reason ?? "Reading candidate information is not allowed.",
+            };
+          }
+          filters.applicationId = input.application_id;
+        }
+
         // Get application ID for the candidate if provided
-        if (input.candidate_id || input.name_or_email) {
-          const candidateId = await this.resolveCandidateId(input);
+        if (this.hasCandidateInput(input)) {
+          const candidateId = await this.resolveReadableCandidateId(input);
           if (!candidateId) {
             return {
               success: false,
               error: "Could not identify candidate. Please provide a name, email, or candidate ID.",
             };
           }
-          const { applications } = await this.ashby.getCandidateWithApplications(candidateId);
-          const activeApp = applications.find((a: Application) => a.status === "Active");
+          const activeApp = await this.ashby.getActiveApplicationForCandidate(
+            candidateId,
+            input.application_id
+          );
           if (!activeApp) {
             return {
               success: false,
@@ -676,9 +840,29 @@ export class ToolExecutor {
           filters.applicationId = activeApp.id;
         }
 
+        if (input.interview_id && !filters.applicationId && !this.hasCandidateInput(input)) {
+          const interview = await this.ashby.getInterview(input.interview_id);
+          const application = await this.ashby.getApplication(interview.applicationId);
+          const check = await this.safety.checkReadOperation(application.candidateId);
+          if (!check.allowed) {
+            return {
+              success: false,
+              error: check.reason ?? "Reading candidate information is not allowed.",
+            };
+          }
+          filters.applicationId = interview.applicationId;
+        }
+
         // Add interview filter if provided
         if (input.interview_id) {
           filters.interviewId = input.interview_id;
+        }
+
+        if (!filters.applicationId && !filters.interviewId) {
+          return {
+            success: false,
+            error: "Please provide application_id, candidate info, or interview_id to list feedback submissions.",
+          };
         }
 
         const feedback = await this.ashby.listFeedbackSubmissions(filters);
@@ -686,6 +870,17 @@ export class ToolExecutor {
       }
 
       case "compare_candidates": {
+        if (input.candidate_ids && input.candidate_ids.length > 0) {
+          for (const candidateId of input.candidate_ids) {
+            const check = await this.safety.checkReadOperation(candidateId);
+            if (!check.allowed) {
+              return {
+                success: false,
+                error: check.reason ?? "Reading candidate information is not allowed.",
+              };
+            }
+          }
+        }
         const jobId = input.job_title ? await this.resolveJobId(input) : undefined;
         const comparison = await this.ashby.compareCandidates(
           input.candidate_ids,
@@ -701,14 +896,14 @@ export class ToolExecutor {
       }
 
       case "get_interview_prep": {
-        const candidateId = await this.resolveCandidateId(input);
+        const candidateId = await this.resolveReadableCandidateId(input);
         if (!candidateId) {
           return {
             success: false,
             error: "Could not identify candidate. Please provide a name, email, or candidate ID.",
           };
         }
-        const prepPacket = await this.ashby.getInterviewPrepPacket(candidateId);
+        const prepPacket = await this.ashby.getInterviewPrepPacket(candidateId, input.application_id);
         return { success: true, data: prepPacket };
       }
 
@@ -730,17 +925,13 @@ export class ToolExecutor {
       case "get_hiring_team": {
         let applicationId = input.application_id;
 
-        if (!applicationId && input.candidate_id) {
-          const { applications } = await this.ashby.getCandidateWithApplications(input.candidate_id);
-          const activeApp = applications.find((a: Application) => a.status === "Active");
-          if (activeApp) applicationId = activeApp.id;
-        }
-
-        if (!applicationId) {
-          const candidateId = await this.resolveCandidateId(input);
+        if (!applicationId && this.hasCandidateInput(input)) {
+          const candidateId = await this.resolveReadableCandidateId(input);
           if (candidateId) {
-            const { applications } = await this.ashby.getCandidateWithApplications(candidateId);
-            const activeApp = applications.find((a: Application) => a.status === "Active");
+            const activeApp = await this.ashby.getActiveApplicationForCandidate(
+              candidateId,
+              input.application_id
+            );
             if (activeApp) applicationId = activeApp.id;
           }
         }
@@ -801,10 +992,12 @@ export class ToolExecutor {
         let applicationId = input.application_id;
 
         if (!applicationId) {
-          const candidateId = await this.resolveCandidateId(input);
+          const candidateId = await this.resolveReadableCandidateId(input, false);
           if (candidateId) {
-            const { applications } = await this.ashby.getCandidateWithApplications(candidateId);
-            const activeApp = applications.find((a: Application) => a.status === "Active");
+            const activeApp = await this.ashby.getActiveApplicationForCandidate(
+              candidateId,
+              input.application_id
+            );
             if (activeApp) applicationId = activeApp.id;
           }
         }
@@ -821,6 +1014,12 @@ export class ToolExecutor {
       }
 
       case "list_interview_events": {
+        if (!input.interview_schedule_id) {
+          return {
+            success: false,
+            error: "Missing required field: interview_schedule_id",
+          };
+        }
         const events = await this.ashby.listInterviewEvents(input.interview_schedule_id);
         return { success: true, data: events };
       }
@@ -854,7 +1053,7 @@ export class ToolExecutor {
           success: true,
           data: {
             candidates,
-            message: `Found ${candidates.length} candidates for triage. React with ✅ to advance, ❌ to reject, or 🤔 to skip.`,
+            message: `Found ${candidates.length} candidates for triage. React with ✅ to mark "advance", ❌ to mark "reject", or 🤔 to skip (no changes applied).`,
             triageMode: true,
           },
         };
@@ -865,18 +1064,26 @@ export class ToolExecutor {
       // =========================================================================
 
       case "list_offers": {
-        const filters: { applicationId?: string; status?: any } = {};
+        const filters: { applicationId?: string; status?: OfferStatus } = {};
 
-        if (input.candidate_id) {
-          const candidateId = await this.resolveCandidateId(input);
+        if (this.hasCandidateInput(input)) {
+          const candidateId = await this.resolveReadableCandidateId(input, false);
           if (candidateId) {
-            const { applications } = await this.ashby["client"].getCandidateWithApplications(candidateId);
-            const activeApp = applications.find(a => a.status === "Active");
-            if (activeApp) filters.applicationId = activeApp.id;
+            const activeApp = await this.ashby.getActiveApplicationForCandidate(
+              candidateId,
+              input.application_id
+            );
+            if (!activeApp) {
+              return {
+                success: false,
+                error: "No active application found for candidate.",
+              };
+            }
+            filters.applicationId = activeApp.id;
           }
         }
 
-        if (input.status) filters.status = input.status as any;
+        if (input.status) filters.status = input.status as OfferStatus;
 
         const offers = await this.ashby.listOffers(filters);
         return { success: true, data: offers };
@@ -888,14 +1095,14 @@ export class ToolExecutor {
       }
 
       case "get_candidate_offer": {
-        const candidateId = await this.resolveCandidateId(input);
+        const candidateId = await this.resolveReadableCandidateId(input);
         if (!candidateId) {
           return {
             success: false,
             error: "Could not identify candidate. Please provide a name, email, or candidate ID.",
           };
         }
-        const offer = await this.ashby.getOfferForCandidate(candidateId);
+        const offer = await this.ashby.getOfferForCandidate(candidateId, input.application_id);
         return { success: true, data: offer };
       }
 
@@ -911,18 +1118,45 @@ export class ToolExecutor {
           endDate?: string;
         } = {};
 
-        if (input.candidate_id) {
-          const candidateId = await this.resolveCandidateId(input);
+        if (input.application_id && !this.hasCandidateInput(input)) {
+          const application = await this.ashby.getApplication(input.application_id);
+          const check = await this.safety.checkReadOperation(application.candidateId);
+          if (!check.allowed) {
+            return {
+              success: false,
+              error: check.reason ?? "Reading candidate information is not allowed.",
+            };
+          }
+          filters.applicationId = input.application_id;
+        }
+
+        if (this.hasCandidateInput(input)) {
+          const candidateId = await this.resolveReadableCandidateId(input, false);
           if (candidateId) {
-            const { applications } = await this.ashby["client"].getCandidateWithApplications(candidateId);
-            const activeApp = applications.find(a => a.status === "Active");
-            if (activeApp) filters.applicationId = activeApp.id;
+            const activeApp = await this.ashby.getActiveApplicationForCandidate(
+              candidateId,
+              input.application_id
+            );
+            if (!activeApp) {
+              return {
+                success: false,
+                error: "No active application found for candidate.",
+              };
+            }
+            filters.applicationId = activeApp.id;
           }
         }
 
         if (input.user_id) filters.userId = input.user_id;
         if (input.start_date) filters.startDate = input.start_date;
         if (input.end_date) filters.endDate = input.end_date;
+
+        if (!filters.applicationId && !filters.userId && !filters.startDate && !filters.endDate) {
+          return {
+            success: false,
+            error: "Please provide candidate info, application_id, user_id, or a date range to list interviews.",
+          };
+        }
 
         const interviews = await this.ashby.listAllInterviews(filters);
         return { success: true, data: interviews };
@@ -935,18 +1169,29 @@ export class ToolExecutor {
 
       // Phase A: Proactive Status Analysis
       case "analyze_candidate_status": {
-        const candidateId = await this.resolveCandidateId(input);
+        const candidateId = await this.resolveReadableCandidateId(input);
         if (!candidateId) {
           return {
             success: false,
             error: "Could not find candidate. Please provide candidate_id, name, or email.",
           };
         }
-        const analysis = await this.ashby.analyzeCandidateStatus(candidateId);
+        const analysis = await this.ashby.analyzeCandidateStatus(candidateId, input.application_id);
         return { success: true, data: analysis };
       }
 
       case "analyze_candidate_blockers": {
+        if (input.candidate_ids && input.candidate_ids.length > 0) {
+          for (const candidateId of input.candidate_ids) {
+            const check = await this.safety.checkReadOperation(candidateId);
+            if (!check.allowed) {
+              return {
+                success: false,
+                error: check.reason ?? "Reading candidate information is not allowed.",
+              };
+            }
+          }
+        }
         const analysis = await this.ashby.analyzeCandidateBlockers(input.candidate_ids);
         return { success: true, data: analysis };
       }
@@ -964,14 +1209,65 @@ export class ToolExecutor {
       return input.candidate_id;
     }
 
-    if (input.name_or_email) {
-      const candidate = await this.ashby.findCandidateByNameOrEmail(
-        input.name_or_email
-      );
+    const query =
+      input.name_or_email ??
+      input.candidate_email ??
+      input.candidate_name;
+
+    if (query) {
+      const candidate = await this.ashby.findCandidateByNameOrEmail(query);
       return candidate?.id ?? null;
     }
 
     return null;
+  }
+
+  /**
+   * Resolve a candidate ID and enforce read safety checks
+   */
+  private async resolveReadableCandidateId(
+    input: ToolInput,
+    required: boolean = true
+  ): Promise<string | null> {
+    const candidateId = await this.resolveCandidateId(input);
+    if (!candidateId) {
+      if (required) {
+        throw new Error("Could not identify candidate. Please provide a name, email, or candidate ID.");
+      }
+      return null;
+    }
+
+    const check = await this.safety.checkReadOperation(candidateId);
+    if (!check.allowed) {
+      throw new Error(check.reason ?? "Reading candidate information is not allowed.");
+    }
+
+    return candidateId;
+  }
+
+  /**
+   * Determine if a write tool requires a candidate ID to proceed
+   */
+  private writeToolRequiresCandidate(toolName: string): boolean {
+    const toolsWithoutCandidate = new Set([
+      "create_candidate",
+      "update_offer",
+      "approve_offer",
+      "send_offer",
+      "reschedule_interview",
+      "cancel_interview",
+    ]);
+
+    return !toolsWithoutCandidate.has(toolName);
+  }
+
+  private hasCandidateInput(input: ToolInput): boolean {
+    return Boolean(
+      input.candidate_id ||
+        input.name_or_email ||
+        input.candidate_name ||
+        input.candidate_email
+    );
   }
 
   /**

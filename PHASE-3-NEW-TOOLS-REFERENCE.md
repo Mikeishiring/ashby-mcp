@@ -117,8 +117,8 @@ Get full stage history for an application.
 List interview events (individual sessions).
 
 **Use when:** Need details on specific interview sessions
-**Input:** optional interview_schedule_id to filter
-**Example:** "Show me all interview events for this week"
+**Input:** interview_schedule_id (required)
+**Example:** "Show me the interview events for schedule abc123"
 
 ---
 

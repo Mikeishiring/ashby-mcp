@@ -15,7 +15,7 @@ const CLEANUP_INTERVAL_MS = 2 * 60 * 1000;
 
 export class TriageSessionManager {
   private readonly sessions: Map<string, TriageSession> = new Map();
-  private cleanupInterval: NodeJS.Timeout | null = null;
+  private cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     // Start cleanup interval
@@ -237,7 +237,7 @@ export class TriageSessionManager {
     }
 
     lines.push("");
-    lines.push("React: ✅ = Advance | ❌ = Reject | 🤔 = Skip");
+    lines.push("React: ✅ = Mark advance | ❌ = Mark reject | 🤔 = Skip (no changes applied)");
 
     return lines.join("\n");
   }
@@ -261,7 +261,7 @@ export class TriageSessionManager {
     lines.push("");
 
     if (advanced > 0 || rejected > 0) {
-      lines.push("_Changes have been applied. React ✅ to confirm, or check Ashby for details._");
+      lines.push("_Decisions recorded. No changes applied. Use explicit commands to update Ashby._");
     }
 
     return lines.join("\n");

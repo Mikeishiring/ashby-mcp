@@ -10,7 +10,7 @@ This guide helps you set up the Ashby recruiting assistant Slack bot for your te
 
 **Time Required:** 15-20 minutes
 **Technical Level:** Basic (API key management, environment variables)
-**Prerequisites:** Access to Ashby admin, Slack workspace admin, Node.js installed
+**Prerequisites:** Access to Ashby admin, Slack workspace admin, Node.js 20+ installed
 
 ---
 
@@ -75,6 +75,13 @@ Recruiters message the bot in Slack, and it talks to Ashby's API to fetch/update
 6. Install the app to your workspace
 7. Copy the **Bot User OAuth Token** (starts with `xoxb-`)
 
+### Slack App Token (Socket Mode)
+
+1. In your Slack app settings, go to **Socket Mode**
+2. Enable Socket Mode
+3. Create an **App-Level Token** with the `connections:write` scope
+4. Copy the **App Token** (starts with `xapp-`)
+
 ---
 
 ## Step 2: Install the Bot
@@ -137,21 +144,37 @@ ANTHROPIC_API_KEY=your_anthropic_api_key_here
 
 # Slack
 SLACK_BOT_TOKEN=xoxb-your-slack-bot-token-here
-SLACK_CHANNEL_ID=C1234567890  # See below for how to find this
+SLACK_APP_TOKEN=xapp-your-app-token-here
+SLACK_SIGNING_SECRET=your-signing-secret  # Optional for Socket Mode
 
 # Optional: Customize behavior
-STALE_THRESHOLD_DAYS=14
-MAX_CANDIDATES_MOVE=2
+SAFETY_MODE=CONFIRM_ALL
+BATCH_LIMIT=2
+CONFIRMATION_TIMEOUT_MS=300000
+STALE_DAYS=14
+
+DAILY_SUMMARY_ENABLED=true
+DAILY_SUMMARY_TIME=09:00
+DAILY_SUMMARY_TIMEZONE=America/New_York
+DAILY_SUMMARY_CHANNEL=C1234567890
+
+PIPELINE_ALERTS_ENABLED=false
+PIPELINE_ALERTS_TIME=09:00
+PIPELINE_ALERTS_TIMEZONE=America/New_York
+PIPELINE_ALERTS_CHANNEL=C1234567890
+PIPELINE_ALERTS_STALE_THRESHOLD=3
+PIPELINE_ALERTS_DECISION_THRESHOLD=2
+
 ANTHROPIC_MODEL=claude-sonnet-4-20250514
 ```
 
-### Finding Your Slack Channel ID
+### Finding a Slack Channel ID
 
 1. Open Slack
 2. Right-click the channel where you want the bot
 3. Click **View channel details**
 4. Scroll down - the Channel ID is at the bottom
-5. Copy it to your `.env` file
+5. Use it for `DAILY_SUMMARY_CHANNEL` or `PIPELINE_ALERTS_CHANNEL` if you enable those features
 
 ---
 
@@ -336,10 +359,13 @@ Edit `.env` to tune the bot:
 
 ```bash
 # How long before someone is "stale"
-STALE_THRESHOLD_DAYS=21  # Default: 14
+STALE_DAYS=21  # Default: 14
 
 # Max candidates to move at once (safety)
-MAX_CANDIDATES_MOVE=5  # Default: 2
+BATCH_LIMIT=5  # Default: 2
+
+# Safety mode: CONFIRM_ALL or BATCH_LIMIT
+SAFETY_MODE=CONFIRM_ALL
 
 # AI model (faster = cheaper, but less capable)
 ANTHROPIC_MODEL=claude-haiku-20250306  # Cheaper option
@@ -357,11 +383,11 @@ Create separate configs for staging/production:
 ```bash
 # .env.production
 ASHBY_API_KEY=prod_key_here
-SLACK_CHANNEL_ID=C_PROD_CHANNEL
+DAILY_SUMMARY_CHANNEL=C_PROD_CHANNEL
 
 # .env.staging
 ASHBY_API_KEY=staging_key_here
-SLACK_CHANNEL_ID=C_STAGING_CHANNEL
+DAILY_SUMMARY_CHANNEL=C_STAGING_CHANNEL
 ```
 
 Run with:

@@ -88,7 +88,7 @@ const feedbackSubmissions: FeedbackSubmission[] = [];
 const completedInterviewsWithoutFeedback = completedInterviews;
 ```
 
-**After (lines 908-917):**
+**After (lines 908-922):**
 ```typescript
 // Get feedback submissions for this application
 const feedbackSubmissions = await this.client.listFeedbackSubmissions({
@@ -96,10 +96,16 @@ const feedbackSubmissions = await this.client.listFeedbackSubmissions({
 });
 
 // Find interviews that don't have feedback yet
-const completedInterviewsWithoutFeedback = completedInterviews.filter(
-  (interview) =>
-    !feedbackSubmissions.some((feedback) => feedback.interviewId === interview.id)
-);
+const hasInterviewIds = feedbackSubmissions.some((feedback) => feedback.interviewId);
+const completedInterviewsWithoutFeedback =
+  feedbackSubmissions.length === 0
+    ? completedInterviews
+    : hasInterviewIds
+      ? completedInterviews.filter(
+        (interview) =>
+          !feedbackSubmissions.some((feedback) => feedback.interviewId === interview.id)
+      )
+      : [];
 ```
 
 **Impact:**
@@ -130,6 +136,7 @@ Allows the bot to list feedback submissions for candidates or specific interview
     type: "object" as const,
     properties: {
       candidate_id: { type: "string", description: "Candidate ID to get feedback for" },
+      application_id: { type: "string", description: "Application ID for candidates with multiple active applications" },
       candidate_name: { type: "string", description: "Candidate name (used to find ID)" },
       candidate_email: { type: "string", description: "Candidate email (used to find ID)" },
       interview_id: { type: "string", description: "Optional: Filter to specific interview" },
@@ -146,21 +153,26 @@ Allows the bot to list feedback submissions for candidates or specific interview
 ## 📊 Files Modified
 
 ### 1. `src/types/ashby.ts`
-**Change:** Added `interviewId` field to `FeedbackSubmission` interface
-**Lines:** 224-233
-**Why:** Needed to correlate feedback with specific interviews
+**Change:** Made feedback submission fields optional and expanded to match API responses
+**Lines:** 224-263
+**Why:** `feedbackSubmission.list` and `feedbackSubmission.info` return different shapes; fields can be missing.
 
 **Updated interface:**
 ```typescript
 export interface FeedbackSubmission {
   id: string;
-  interviewId: string;  // ← NEW
-  submittedAt: string;
-  submittedByUserId: string;
+  interviewId?: string;
+  interviewEventId?: string;
+  applicationId?: string;
+  formDefinition?: FeedbackFormDefinition;
+  submittedValues?: FeedbackSubmittedValues;
+  submittedAt?: string;
   submittedByUser?: User;
-  overallRating?: number;
-  overallRecommendation?: string;
-  fieldSubmissions: FieldSubmission[];
+  submittedBy?: { name?: string } | null;
+  overallRating?: number | null;
+  overallRecommendation?: string | null;
+  notes?: string | null;
+  fieldSubmissions?: FieldSubmission[];
 }
 ```
 
@@ -280,7 +292,8 @@ Feedback submissions for John Smith:
 - **Overall:** 7.8/10 → 0.2 point improvement
 
 ### Remaining Gaps
-- Still need `feedbackSubmission.info` for detailed feedback content
+- Feedback field shapes differ across endpoints; normalize fields for consistent Slack output
+- Some feedback submissions omit interviewId; avoid assuming interview coverage without it
 - No sentiment analysis yet (requires feedback details)
 - No interviewer suggestions (Phase B feature)
 
@@ -321,7 +334,7 @@ npm run build
 3. Test blocker analysis improvements
 
 ### Phase 2B (Optional Enhancement)
-1. Add `feedbackSubmission.info` for detailed feedback content
+1. Normalize feedback fields across `applicationFeedback.list` and `feedbackSubmission.*`
 2. Analyze feedback sentiment (strong/weak)
 3. Detect consensus among interviewers
 4. Flag conflicting feedback

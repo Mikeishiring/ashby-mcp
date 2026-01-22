@@ -11,7 +11,9 @@ import type {
   Application,
   Candidate,
   Job,
+  InterviewPlan,
   InterviewStage,
+  InterviewEvent,
   Note,
   ApplicationWithContext,
   PipelineSummary,
@@ -26,6 +28,7 @@ import type {
   OfferStatus,
   Interview,
   InterviewSchedule,
+  User,
   CreateCandidateParams,
   CandidateStatusAnalysis,
   BatchBlockerAnalysis,
@@ -35,6 +38,7 @@ import type {
   CandidatePriority,
   RecentActivity,
   FeedbackSubmission,
+  FieldSubmission,
 } from "../types/index.js";
 
 export class AshbyService {
@@ -54,15 +58,57 @@ export class AshbyService {
     return this.client.searchCandidates(query);
   }
 
-  async getCandidateWithApplications(candidateId: string) {
+  async getCandidateWithApplications(candidateId: string): Promise<{
+    candidate: Candidate;
+    applications: Application[];
+  }> {
     return this.client.getCandidateWithApplications(candidateId);
+  }
+
+  async getApplication(applicationId: string): Promise<Application> {
+    return this.client.getApplication(applicationId);
   }
 
   async findCandidateByNameOrEmail(
     query: string
   ): Promise<Candidate | null> {
     const results = await this.client.searchCandidates(query);
-    return results[0] ?? null;
+    if (results.length === 0) {
+      return null;
+    }
+
+    const normalizedQuery = query.trim().toLowerCase();
+    const isEmailQuery = normalizedQuery.includes("@");
+
+    if (isEmailQuery) {
+      const exactMatches = results.filter(
+        (candidate) => candidate.primaryEmailAddress?.value?.toLowerCase() === normalizedQuery
+      );
+      if (exactMatches.length === 1) {
+        return exactMatches[0]!;
+      }
+      if (exactMatches.length > 1) {
+        throw new Error(
+          `Multiple candidates found for ${query}. Please provide candidate_id instead.`
+        );
+      }
+    }
+
+    if (results.length === 1) {
+      return results[0]!;
+    }
+
+    throw new Error(
+      `Multiple candidates matched "${query}". Please provide candidate_id or a more specific email.`
+    );
+  }
+
+  async getActiveApplicationForCandidate(
+    candidateId: string,
+    applicationId?: string
+  ): Promise<Application | null> {
+    const { applications } = await this.client.getCandidateWithApplications(candidateId);
+    return this.selectActiveApplication(applications, applicationId);
   }
 
   // ===========================================================================
@@ -281,7 +327,7 @@ export class AshbyService {
     return this.client.addCandidateTag(candidateId, tagId);
   }
 
-  async listCandidateTags() {
+  async listCandidateTags(): Promise<Array<{ id: string; title: string }>> {
     return this.client.listCandidateTags();
   }
 
@@ -298,15 +344,15 @@ export class AshbyService {
   // Interview Scheduling Operations
   // ===========================================================================
 
-  async listInterviewPlans() {
+  async listInterviewPlans(): Promise<InterviewPlan[]> {
     return this.client.listInterviewPlans();
   }
 
-  async listUsers() {
+  async listUsers(): Promise<User[]> {
     return this.client.listUsers();
   }
 
-  async getInterviewSchedulesForCandidate(candidateId: string) {
+  async getInterviewSchedulesForCandidate(candidateId: string): Promise<InterviewSchedule[]> {
     const { applications } = await this.client.getCandidateWithApplications(
       candidateId
     );
@@ -325,12 +371,10 @@ export class AshbyService {
     endTime: string,
     interviewerIds: string[],
     meetingLink?: string,
-    location?: string
-  ) {
-    const { applications } = await this.client.getCandidateWithApplications(
-      candidateId
-    );
-    const activeApp = applications.find((a) => a.status === "Active");
+    location?: string,
+    applicationId?: string
+  ): Promise<InterviewSchedule> {
+    const activeApp = await this.getActiveApplicationForCandidate(candidateId, applicationId);
 
     if (!activeApp) {
       throw new Error("No active application found for this candidate");
@@ -409,7 +453,10 @@ export class AshbyService {
   // Candidate Scorecards (Feature 1)
   // ===========================================================================
 
-  async getCandidateScorecard(candidateId: string): Promise<Scorecard> {
+  async getCandidateScorecard(
+    candidateId: string,
+    applicationId?: string
+  ): Promise<Scorecard> {
     const [{ candidate, applications }, jobs] = await Promise.all([
       this.client.getCandidateWithApplications(candidateId),
       this.client.listJobs(),
@@ -417,8 +464,12 @@ export class AshbyService {
 
     const jobMap = new Map(jobs.map((j) => [j.id, j]));
 
-    // Get feedback for all applications
-    const feedbackPromises = applications.map((app) =>
+    const activeApp = this.selectActiveApplication(applications, applicationId);
+    if (!activeApp) {
+      throw new Error("No active application found for this candidate");
+    }
+
+    const feedbackPromises = [activeApp].map((app) =>
       this.client.getApplicationFeedback(app.id)
     );
     const allFeedback = await Promise.all(feedbackPromises);
@@ -443,26 +494,16 @@ export class AshbyService {
       // Get submitter name from the embedded user object
       const submitterName = submission.submittedByUser
         ? `${submission.submittedByUser.firstName} ${submission.submittedByUser.lastName}`.trim()
-        : "Unknown";
+        : submission.submittedBy?.name ?? "Unknown";
 
-      // Build field lookup from form definition
-      const fieldLookup = new Map<string, { title: string; type: string; selectableValues?: Array<{ label: string; value: string }> }>();
-      for (const section of submission.formDefinition.sections) {
-        for (const fieldDef of section.fields) {
-          const f = fieldDef.field;
-          const entry: { title: string; type: string; selectableValues?: Array<{ label: string; value: string }> } = {
-            title: f.title,
-            type: f.type,
-          };
-          if (f.selectableValues) {
-            entry.selectableValues = f.selectableValues;
-          }
-          fieldLookup.set(f.path, entry);
-        }
-      }
+      const fieldLookup = this.buildFeedbackFieldLookup(submission);
+      const submittedValues = submission.submittedValues ?? {};
 
       // Extract overall recommendation value and map to label
-      const overallRecValue = submission.submittedValues["overall_recommendation"];
+      const overallRecValue =
+        submittedValues["overall_recommendation"] ??
+        submittedValues["overallRecommendation"] ??
+        submittedValues["recommendation"];
       let overallRecommendation: string | null = null;
       let overallRating: number | null = null;
 
@@ -471,14 +512,39 @@ export class AshbyService {
         if (recField?.selectableValues) {
           const match = recField.selectableValues.find((sv) => sv.value === String(overallRecValue));
           overallRecommendation = match?.label ?? String(overallRecValue);
-          // Extract numeric rating from value (e.g., "4" -> 4)
-          overallRating = parseInt(String(overallRecValue), 10);
-          if (!isNaN(overallRating)) {
-            overallRatings.push(overallRating);
-          }
         } else {
           overallRecommendation = String(overallRecValue);
         }
+        const parsed = parseInt(String(overallRecValue), 10);
+        if (!isNaN(parsed)) {
+          overallRating = parsed;
+        }
+      }
+
+      if (!overallRecommendation && submission.overallRecommendation) {
+        overallRecommendation = submission.overallRecommendation;
+      }
+
+      const ratingCandidate = submission.overallRating ?? submission.rating;
+      if (typeof ratingCandidate === "number" && overallRating === null) {
+        overallRating = ratingCandidate;
+      }
+
+      if (overallRating === null) {
+        const ratingValue =
+          submittedValues["overall_rating"] ??
+          submittedValues["overallRating"] ??
+          submittedValues["rating"];
+        const coercedRating = this.coerceFeedbackValue(ratingValue);
+        if (coercedRating.numericValue !== null) {
+          overallRating = coercedRating.numericValue;
+        }
+      }
+
+      if (overallRating !== null) {
+        overallRatings.push(overallRating);
+      }
+      if (overallRecommendation) {
         recommendations.push(overallRecommendation);
       }
 
@@ -486,33 +552,22 @@ export class AshbyService {
       const interviewerCard: Scorecard["interviewerScorecards"][number] = {
         interviewerId: submission.submittedByUser?.id ?? "unknown",
         interviewerName: submitterName,
-        submittedAt: submission.submittedAt,
+        submittedAt: submission.submittedAt ?? "",
         overallRating,
         overallRecommendation,
         attributeRatings: [],
       };
 
-      // Process submitted values using field definitions
-      for (const [path, rawValue] of Object.entries(submission.submittedValues)) {
-        if (path === "overall_recommendation") continue; // Already handled
-
-        const fieldInfo = fieldLookup.get(path);
-        const title = fieldInfo?.title ?? path;
-        const fieldType = fieldInfo?.type ?? "unknown";
-
-        // Extract the actual value (scores are nested as {score: number})
-        let numericValue: number | null = null;
-        let textValue: string | null = null;
-
-        if (rawValue !== null && typeof rawValue === "object" && "score" in rawValue) {
-          numericValue = (rawValue as { score: number }).score;
-        } else if (typeof rawValue === "number") {
-          numericValue = rawValue;
-        } else if (typeof rawValue === "boolean") {
-          textValue = rawValue ? "Yes" : "No";
-        } else if (typeof rawValue === "string") {
-          textValue = rawValue;
+      const fields = this.buildFieldSubmissions(submission);
+      for (const field of fields) {
+        const title = field.fieldTitle;
+        const fieldType = field.fieldType || "unknown";
+        const titleLower = title.toLowerCase();
+        if (titleLower.includes("overall recommendation") || titleLower.includes("overall rating")) {
+          continue;
         }
+
+        const { numericValue, textValue } = this.coerceFeedbackValue(field.value);
 
         // Add to interviewer's card
         interviewerCard.attributeRatings.push({
@@ -531,7 +586,7 @@ export class AshbyService {
           attr.ratings.push({
             rating: numericValue,
             submittedBy: submitterName,
-            submittedAt: submission.submittedAt,
+            submittedAt: submission.submittedAt ?? "",
           });
         }
         if (textValue && fieldType === "RichText") {
@@ -539,7 +594,6 @@ export class AshbyService {
         }
 
         // Extract pros/cons based on field title
-        const titleLower = title.toLowerCase();
         if (textValue) {
           if (titleLower.includes("strength") || titleLower.includes("pro") || titleLower.includes("positive")) {
             pros.push(textValue);
@@ -576,7 +630,6 @@ export class AshbyService {
     }
 
     // Get the primary job for this candidate
-    const activeApp = applications.find((a) => a.status === "Active");
     const job = activeApp ? jobMap.get(activeApp.jobId) ?? null : null;
 
     return {
@@ -622,7 +675,7 @@ export class AshbyService {
 
     // Calculate analytics per source
     const analytics: SourceAnalytics[] = [];
-    for (const [_sourceKey, apps] of bySource.entries()) {
+    for (const apps of bySource.values()) {
       const activeCount = apps.filter((a) => a.status === "Active").length;
       const hiredCount = apps.filter((a) => a.status === "Hired").length;
       const archivedCount = apps.filter((a) => a.status === "Archived").length;
@@ -668,12 +721,10 @@ export class AshbyService {
 
   async rejectCandidate(
     candidateId: string,
-    archiveReasonId: string
+    archiveReasonId: string,
+    applicationId?: string
   ): Promise<Application> {
-    const { applications } = await this.client.getCandidateWithApplications(
-      candidateId
-    );
-    const activeApp = applications.find((a) => a.status === "Active");
+    const activeApp = await this.getActiveApplicationForCandidate(candidateId, applicationId);
 
     if (!activeApp) {
       throw new Error("No active application found for this candidate");
@@ -743,17 +794,20 @@ export class AshbyService {
   // Interview Prep Packet (Feature 6)
   // ===========================================================================
 
-  async getInterviewPrepPacket(candidateId: string): Promise<PrepPacket> {
+  async getInterviewPrepPacket(
+    candidateId: string,
+    applicationId?: string
+  ): Promise<PrepPacket> {
     const [context, scorecard, schedules] = await Promise.all([
       this.getCandidateFullContext(candidateId),
-      this.getCandidateScorecard(candidateId).catch(() => null),
+      this.getCandidateScorecard(candidateId, applicationId).catch(() => null),
       this.getInterviewSchedulesForCandidate(candidateId),
     ]);
 
     const { candidate, applications, notes } = context;
 
     // Get the active application's job
-    const activeApp = applications.find((a) => a.status === "Active");
+    const activeApp = this.selectActiveApplication(applications, applicationId);
     const job = activeApp?.job ?? null;
 
     // Find upcoming interview
@@ -820,6 +874,10 @@ export class AshbyService {
     endDate?: string;
   }): Promise<Interview[]> {
     return this.client.listInterviews(filters);
+  }
+
+  async getInterview(interviewId: string): Promise<Interview> {
+    return this.client.getInterview(interviewId);
   }
 
   async getUpcomingInterviews(limit: number = 10): Promise<Interview[]> {
@@ -900,11 +958,11 @@ export class AshbyService {
     );
   }
 
-  async getOfferForCandidate(candidateId: string): Promise<Offer | null> {
-    const { applications } = await this.client.getCandidateWithApplications(
-      candidateId
-    );
-    const activeApp = applications.find((a) => a.status === "Active");
+  async getOfferForCandidate(
+    candidateId: string,
+    applicationId?: string
+  ): Promise<Offer | null> {
+    const activeApp = await this.getActiveApplicationForCandidate(candidateId, applicationId);
 
     if (!activeApp) return null;
 
@@ -925,20 +983,32 @@ export class AshbyService {
     relocationBonus?: number;
     variableCompensation?: number;
     notes?: string;
+    applicationId?: string;
   }): Promise<Offer> {
-    const { applications } = await this.client.getCandidateWithApplications(
-      params.candidateId
+    const activeApp = await this.getActiveApplicationForCandidate(
+      params.candidateId,
+      params.applicationId
     );
-    const activeApp = applications.find((a) => a.status === "Active");
 
     if (!activeApp) {
       throw new Error("No active application found for this candidate");
     }
 
-    const { candidateId, ...offerParams } = params;
     return this.client.createOffer({
-      ...offerParams,
       applicationId: activeApp.id,
+      offerProcessId: params.offerProcessId,
+      startDate: params.startDate,
+      salary: params.salary,
+      ...(params.salaryFrequency ? { salaryFrequency: params.salaryFrequency } : {}),
+      ...(params.currency ? { currency: params.currency } : {}),
+      ...(params.equity !== undefined ? { equity: params.equity } : {}),
+      ...(params.equityType ? { equityType: params.equityType } : {}),
+      ...(params.signingBonus !== undefined ? { signingBonus: params.signingBonus } : {}),
+      ...(params.relocationBonus !== undefined ? { relocationBonus: params.relocationBonus } : {}),
+      ...(params.variableCompensation !== undefined
+        ? { variableCompensation: params.variableCompensation }
+        : {}),
+      ...(params.notes ? { notes: params.notes } : {}),
     });
   }
 
@@ -968,6 +1038,147 @@ export class AshbyService {
   // ===========================================================================
   // Private Helpers
   // ===========================================================================
+
+  private selectActiveApplication<T extends { id: string; status: Application["status"] }>(
+    applications: T[],
+    applicationId?: string
+  ): T | null {
+    if (applicationId) {
+      const match = applications.find((app) => app.id === applicationId);
+      if (!match) {
+        throw new Error("Provided application_id does not belong to this candidate.");
+      }
+      if (match.status !== "Active") {
+        throw new Error("Selected application is not active. Please provide an active application_id.");
+      }
+      return match;
+    }
+
+    const activeApps = applications.filter((app) => app.status === "Active");
+    if (activeApps.length === 0) {
+      return null;
+    }
+    if (activeApps.length > 1) {
+      const ids = activeApps.slice(0, 3).map((app) => app.id);
+      const extraCount = activeApps.length - ids.length;
+      const hint = ids.length > 0
+        ? ` (e.g., ${ids.join(", ")}${extraCount > 0 ? ` and ${extraCount} more` : ""})`
+        : "";
+      throw new Error(
+        `Multiple active applications found for this candidate. Please provide application_id${hint}.`
+      );
+    }
+
+    return activeApps[0] ?? null;
+  }
+
+  private buildFeedbackFieldLookup(
+    submission: FeedbackSubmission
+  ): Map<
+    string,
+    { id?: string; title: string; type: string; selectableValues?: Array<{ label: string; value: string }> }
+  > {
+    const lookup = new Map<
+      string,
+      { id?: string; title: string; type: string; selectableValues?: Array<{ label: string; value: string }> }
+    >();
+    const formDefinition = submission.formDefinition;
+    if (!formDefinition) {
+      return lookup;
+    }
+
+    for (const section of formDefinition.sections ?? []) {
+      for (const fieldDef of section.fields) {
+        const f = fieldDef.field;
+        const entry: {
+          id?: string;
+          title: string;
+          type: string;
+          selectableValues?: Array<{ label: string; value: string }>;
+        } = {
+          ...(f.id ? { id: f.id } : {}),
+          title: f.title,
+          type: f.type,
+          ...(f.selectableValues ? { selectableValues: f.selectableValues } : {}),
+        };
+        if (f.path) {
+          lookup.set(f.path, entry);
+        }
+        if (f.id) {
+          lookup.set(f.id, entry);
+        }
+      }
+    }
+
+    return lookup;
+  }
+
+  private buildFieldSubmissions(submission: FeedbackSubmission): FieldSubmission[] {
+    if (submission.fieldSubmissions && submission.fieldSubmissions.length > 0) {
+      return submission.fieldSubmissions;
+    }
+
+    const submittedValues = submission.submittedValues;
+    if (!submittedValues || typeof submittedValues !== "object") {
+      return [];
+    }
+
+    const fieldLookup = this.buildFeedbackFieldLookup(submission);
+    const fields: FieldSubmission[] = [];
+
+    for (const [path, rawValue] of Object.entries(submittedValues)) {
+      if (rawValue === null || rawValue === undefined) continue;
+      const info = fieldLookup.get(path);
+      let value: unknown = rawValue;
+      if (
+        info?.selectableValues &&
+        info.type !== "Score" &&
+        (typeof rawValue === "string" || typeof rawValue === "number")
+      ) {
+        const match = info.selectableValues.find((sv) => sv.value === String(rawValue));
+        if (match) {
+          value = match.label;
+        }
+      }
+      const { numericValue, textValue } = this.coerceFeedbackValue(value);
+      const resolvedValue = numericValue !== null ? numericValue : textValue ?? value;
+
+      fields.push({
+        fieldId: info?.id ?? path,
+        fieldTitle: info?.title ?? path,
+        fieldType: info?.type ?? "unknown",
+        value: resolvedValue,
+      });
+    }
+
+    return fields;
+  }
+
+  private coerceFeedbackValue(rawValue: unknown): {
+    numericValue: number | null;
+    textValue: string | null;
+  } {
+    if (rawValue !== null && typeof rawValue === "object" && "score" in rawValue) {
+      const scoreValue = (rawValue as { score?: number }).score;
+      if (typeof scoreValue === "number") {
+        return { numericValue: scoreValue, textValue: null };
+      }
+    }
+
+    if (typeof rawValue === "number") {
+      return { numericValue: rawValue, textValue: null };
+    }
+
+    if (typeof rawValue === "boolean") {
+      return { numericValue: null, textValue: rawValue ? "Yes" : "No" };
+    }
+
+    if (typeof rawValue === "string") {
+      return { numericValue: null, textValue: rawValue };
+    }
+
+    return { numericValue: null, textValue: null };
+  }
 
   private enrichApplication(
     app: Application,
@@ -1026,12 +1237,15 @@ export class AshbyService {
   /**
    * Analyze a single candidate's status with intelligent blocker detection
    */
-  async analyzeCandidateStatus(candidateId: string): Promise<CandidateStatusAnalysis> {
+  async analyzeCandidateStatus(
+    candidateId: string,
+    applicationId?: string
+  ): Promise<CandidateStatusAnalysis> {
     // Get candidate with all applications
     const { candidate, applications } = await this.client.getCandidateWithApplications(candidateId);
 
     // Find active application
-    const activeApp = applications.find(app => app.status === "Active");
+    const activeApp = this.selectActiveApplication(applications, applicationId);
     if (!activeApp) {
       throw new Error("No active application found for candidate");
     }
@@ -1066,17 +1280,23 @@ export class AshbyService {
     });
 
     // Find interviews that don't have feedback yet
-    const completedInterviewsWithoutFeedback = completedInterviews.filter(
-      (interview) =>
-        !feedbackSubmissions.some((feedback) => feedback.interviewId === interview.id)
-    );
+    const hasInterviewIds = feedbackSubmissions.some((feedback) => feedback.interviewId);
+    const completedInterviewsWithoutFeedback =
+      feedbackSubmissions.length === 0
+        ? completedInterviews
+        : hasInterviewIds
+          ? completedInterviews.filter(
+            (interview) =>
+              !feedbackSubmissions.some((feedback) => feedback.interviewId === interview.id)
+          )
+          : [];
 
     // Get pending offer
     let pendingOffer: Offer | undefined;
     try {
       const offers = await this.client.listOffers({ applicationId: application.id });
       pendingOffer = offers.find(o => ["Draft", "Pending", "Approved"].includes(o.status));
-    } catch (error) {
+    } catch {
       // Offers might not be available
     }
 
@@ -1336,7 +1556,7 @@ export class AshbyService {
     pendingOffer?: Offer;
   }): RecentActivity[] {
     const activities: RecentActivity[] = [];
-    const { allInterviews, pendingOffer } = context;
+    const { allInterviews, feedbackSubmissions, pendingOffer } = context;
 
     // Add recent interviews
     const recentInterviews = allInterviews
@@ -1355,7 +1575,21 @@ export class AshbyService {
       });
     }
 
-    // TODO: Add feedback when API is available
+    const recentFeedback = feedbackSubmissions
+      .filter((feedback) => feedback.submittedAt)
+      .sort((a, b) => new Date(b.submittedAt!).getTime() - new Date(a.submittedAt!).getTime())
+      .slice(0, 3);
+
+    for (const feedback of recentFeedback) {
+      const submitter = feedback.submittedByUser
+        ? `${feedback.submittedByUser.firstName} ${feedback.submittedByUser.lastName}`.trim()
+        : feedback.submittedBy?.name;
+      activities.push({
+        type: "feedback",
+        timestamp: feedback.submittedAt!,
+        summary: submitter ? `Feedback submitted by ${submitter}` : "Feedback submitted",
+      });
+    }
 
     // Add offer activity
     if (pendingOffer) {
@@ -1424,15 +1658,19 @@ export class AshbyService {
   // Sources & Hiring Team (Phase 3C)
   // ===========================================================================
 
-  async listSources() {
+  async listSources(): Promise<Array<{ id: string; title: string }>> {
     return this.client.listSources();
   }
 
-  async listHiringTeamRoles() {
+  async listHiringTeamRoles(): Promise<Array<{ id: string; label: string }>> {
     return this.client.listHiringTeamRoles();
   }
 
-  async getApplicationHiringTeam(applicationId: string) {
+  async getApplicationHiringTeam(applicationId: string): Promise<Array<{
+    userId: string;
+    roleId: string;
+    role: { id: string; label: string };
+  }>> {
     return this.client.listApplicationHiringTeam(applicationId);
   }
 
@@ -1440,11 +1678,11 @@ export class AshbyService {
   // User Management (Phase 3C)
   // ===========================================================================
 
-  async getUserDetails(userId: string) {
+  async getUserDetails(userId: string): Promise<User> {
     return this.client.getUser(userId);
   }
 
-  async searchUsers(params: { name?: string; email?: string }) {
+  async searchUsers(params: { name?: string; email?: string }): Promise<User[]> {
     return this.client.searchUsers(params);
   }
 
@@ -1452,11 +1690,15 @@ export class AshbyService {
   // Feedback & Custom Fields (Phase 3D/3E)
   // ===========================================================================
 
-  async getFeedbackDetails(feedbackSubmissionId: string) {
-    return this.client.getFeedbackSubmission(feedbackSubmissionId);
+  async getFeedbackDetails(feedbackSubmissionId: string): Promise<FeedbackSubmission> {
+    const submission = await this.client.getFeedbackSubmission(feedbackSubmissionId);
+    if (!submission.fieldSubmissions || submission.fieldSubmissions.length === 0) {
+      submission.fieldSubmissions = this.buildFieldSubmissions(submission);
+    }
+    return submission;
   }
 
-  async listCustomFields() {
+  async listCustomFields(): Promise<Array<{ id: string; title: string; fieldType: string }>> {
     return this.client.listCustomFields();
   }
 
@@ -1464,24 +1706,24 @@ export class AshbyService {
   // Enhanced Context (Phase 3G)
   // ===========================================================================
 
-  async listLocations() {
+  async listLocations(): Promise<Array<{ id: string; name: string }>> {
     return this.client.listLocations();
   }
 
-  async listDepartments() {
+  async listDepartments(): Promise<Array<{ id: string; name: string }>> {
     return this.client.listDepartments();
   }
 
-  async getApplicationHistory(applicationId: string) {
+  async getApplicationHistory(applicationId: string): Promise<Array<Record<string, unknown>>> {
     return this.client.getApplicationHistory(applicationId);
   }
 
-  async getInterviewStageDetails(interviewStageId: string) {
+  async getInterviewStageDetails(interviewStageId: string): Promise<InterviewStage | null> {
     // Use the existing method that fetches from cached list
     return this.client.getInterviewStage(interviewStageId);
   }
 
-  async listInterviewEvents(interviewScheduleId?: string) {
+  async listInterviewEvents(interviewScheduleId?: string): Promise<InterviewEvent[]> {
     return this.client.listInterviewEvents(interviewScheduleId);
   }
 }

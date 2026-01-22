@@ -140,7 +140,7 @@ Successfully expanded Ashby bot API coverage from 36 tools to **51 tools** (+42%
 
 4. **`list_interview_events`** - List interview events/sessions
    - Individual interview session details
-   - Optional filtering by schedule
+   - Requires interview_schedule_id for a specific schedule
 
 **API Endpoints:**
 - `location.list` (GET)

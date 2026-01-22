@@ -262,14 +262,21 @@ export type FeedbackSubmittedValues = Record<string, string | number | boolean |
  */
 export interface FeedbackSubmission {
   id: string;
-  interviewId: string;
+  interviewId?: string;
   interviewEventId?: string;
-  applicationId: string;
-  feedbackFormDefinitionId: string;
-  formDefinition: FeedbackFormDefinition;
-  submittedValues: FeedbackSubmittedValues;
-  submittedAt: string;
+  applicationId?: string;
+  feedbackFormDefinitionId?: string;
+  formDefinition?: FeedbackFormDefinition;
+  submittedValues?: FeedbackSubmittedValues;
+  submittedAt?: string;
   submittedByUser?: User;
+  submittedBy?: { name?: string } | null;
+  interviewStage?: InterviewStage;
+  rating?: number | null;
+  overallRating?: number | null;
+  overallRecommendation?: string | null;
+  notes?: string | null;
+  fieldSubmissions?: FieldSubmission[];
 }
 
 /**

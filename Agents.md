@@ -1,97 +1,59 @@
 # Ashby Agent Architecture
 
-This document describes the architecture and operational flow of the Ashby ATS MCP Server.
+This document describes the architecture and operational flow of the Ashby Slack recruiting assistant.
 
 ## System Overview
 
-The Ashby MCP Server acts as a bridge between **Claude Desktop** and the **Ashby Applicant Tracking System (ATS)**. It leverages the **Model Context Protocol (MCP)** to expose ATS capabilities as executable tools for an AI agent.
+The assistant lives in Slack and uses Claude (Anthropic) for reasoning, with Ashby as the source of truth.
 
 ```mermaid
 graph TD
-    User[User / Recruiter] <--> Claude[Claude Desktop]
-    Claude <--> MCP[MCP Server (server.py)]
-    MCP <--> Client[Ashby Client (ashby_client.py)]
-    Client <--> API[Ashby REST API]
+    User[User / Recruiter] <--> Slack[Slack Channel]
+    Slack <--> Bot[Slack Bot (Bolt, Socket Mode)]
+    Bot <--> Claude[Claude Agent]
+    Claude <--> Tools[Tool Executor + Safety]
+    Tools <--> Ashby[Ashby Service + Client]
+    Ashby <--> API[Ashby REST API]
 ```
 
 ## Core Architecture
 
-### 1. Transport & Protocol Layer (`server.py`)
-- **MCP Protocol**: Uses the Stdio transport to communicate with Claude.
-- **Tool Definitions**: Exposes 20+ specialized tools including pipeline summaries, candidate search, and write actions (notes, stage moves).
-- **Instructions**: Injects `CLAUDE_INSTRUCTIONS.md` directly into the system prompt to define the "Recruiter Persona".
+### 1. Slack Interface (`src/slack/bot.ts`)
+- Listens for @mentions in channels
+- Handles emoji confirmations and triage reactions
+- Posts replies, summaries, and alerts
 
-### 2. Interaction Layer (`ashby_client.py`)
-- **API Wrapper**: A robust Python client handling authentication, base64 encoding, and error handling.
-- **Pagination Logic**: Implements `_get_all_paginated` to handle large candidate lists (up to ~900 in current environment).
-- **Caching**: Local in-memory caching for semi-static data like `jobs` and `interview_stages` to improve latency.
+### 2. AI Layer (`src/ai/*`)
+- Tool definitions (`tools.ts`) describe 52 available actions (37 read, 15 write)
+- Agent (`agent.ts`) manages Claude tool use
+- Executor (`executor.ts`) validates inputs and calls services
+- Includes proactive analysis tools (`analyze_candidate_status`, `analyze_candidate_blockers`)
 
-### 3. Intelligence Layer (`CLAUDE_INSTRUCTIONS.md`)
-- **Recruiter Persona**: Guides the LLM to think proactively (e.g., flagging stale candidates, suggesting next steps).
-- **Hard Constraints**: Enforces safety limits, such as a maximum of 5 candidates per batch operation.
-- **Context Awareness**: Provides specific thresholds (e.g., 14 days for "stale") and stage definitions.
+### 3. Service Layer (`src/ashby/*`)
+- `client.ts` handles Ashby API requests (45 endpoints), pagination, and caching
+- `service.ts` provides higher-level workflows and analysis
+
+### 4. Safety (`src/safety/*`)
+- Confirmation manager tracks pending write actions
+- Safety guards block hired candidates and enforce batch limits
+
+### 5. Scheduling & Extras
+- `src/scheduler/*` handles daily summaries and pipeline alerts
+- `src/reminders/*` schedules Slack reminders
+- `src/triage/*` supports review-only triage sessions with emoji reactions (✅/❌/🤔)
 
 ## Operational Flow
 
-The Ashby MCP server can be used in two ways:
+1. User @mentions the bot in Slack
+2. Claude selects tools based on the request
+3. Safety checks run before any write action
+4. Bot asks for ✅ confirmation when required
+5. Ashby API executes the requested action
 
-### Option 1: Claude Desktop (Current, Recommended)
-```mermaid
-graph TD
-    User[User] <--> Claude[Claude Desktop + LLM]
-    Claude <--> MCP[Ashby MCP Server]
-    MCP <--> Ashby[Ashby API]
-```
+## Constraints
+- Ashby is the source of truth; no local database
+- Hired candidates are blocked for reads and writes
+- Triage is review-only; no changes are applied automatically
 
-**How it works:**
-- Claude Desktop provides the LLM intelligence
-- MCP server provides Ashby-specific tools and basic instructions
-- User interacts directly with Claude Desktop
-
-### Option 2: Slack Bot Integration (Future Roadmap)
-```mermaid
-graph TD
-    Slack[Slack] <--> Bot[Slack Bot + LLM]
-    Bot <--> MCP[Ashby MCP Server]
-    MCP <--> Ashby[Ashby API]
-```
-
-**How it would work:**
-- Separate Slack bot with its own LLM (OpenAI/Claude API)
-- MCP server provides Ashby tools only (no LLM instructions)
-- Bot handles conversation flow, context, and user permissions
-- Team collaboration features added
-
-**Important Distinction:** The MCP server provides **tools and data**, not LLM intelligence. The LLM always runs in the client application (Claude Desktop or future Slack bot).
-
-### ✅ Current Implementation
-- **Environment Mapping**: `ashby_map_setup` tool discovers Ashby configuration
-- **Basic Access Levels**: READ_ONLY, COMMENT_ONLY, FULL_WRITE implemented
-- **Safety Controls**: PII redaction, batch limits, hired candidate protection
-
-### 🚧 Future Graduated Autonomy (Not Implemented)
-The roadmap includes more granular access levels:
-- **Level 1 (Schedule-only)**: Interview scheduling capabilities
-- **Level 2 (Comment-only)**: Notes and feedback only
-- **Additional Levels**: More precise permission controls
-
-## Roadmap & Safety Goals
-
-### Short-Term: The "Safe Adapter"
-- **Adherence over Automation**: Focus on executing specific instructions (e.g., "Reschedule John Doe") precisely.
-- **Clarification Loops**: The agent must proactively double-check identities ("Which John Doe? I found two.") and intent.
-- **Deterministic Documentation**: Automate the mapping of the user's specific Ashby architecture to a local lexicon.
-
-### Mid-Term: Privacy & Security (COMPLETED)
-- **Data Redaction**: Automatic stripping of PII (emails, phones) and sensitive info for `USER` roles.
-- **Access Control**: "Hired" candidates are restricted to `ADMIN` roles. Identity-aware note tagging implemented.
-- **Environment Context**: GitHub safety logic via `ashby_strip_technical_pii` implemented for technical reviews.
-- **Aggregate-only Stats**: Pipeline statistics restricted for non-admin users.
-
-### Long-Term: local Context
-- **Local Resume Ingestion**: Placeholder implemented for ingesting local files via automated flows.
-
-## Summary of Constraints
-- **Ashby as Source of Truth**: All actions go through Ashby (no direct Google Calendar/Gmail bypass).
-- **No Database**: The MCP is a **Lexicon and Translator**, not a data store.
-- **Privacy First**: Explicitly designed to prevent data leaks in shared channels.
+## Legacy Notes
+Python files in the repository are legacy or experimental and are not used by the TypeScript Slack bot runtime.

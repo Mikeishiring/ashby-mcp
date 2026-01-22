@@ -1,7 +1,39 @@
 # Ashby API Endpoint Reference
-**Complete endpoint catalog for internal reference**
-**Last Updated:** 2026-01-19
+**Complete endpoint catalog with implementation status**
+**Last Updated:** 2026-01-22
 **Source:** https://developers.ashbyhq.com/reference
+
+---
+
+## Summary
+
+| Category | Total | Implemented | Coverage |
+|----------|-------|-------------|----------|
+| Candidates | 15 | 8 | 53% |
+| Applications | 13 | 6 | 46% |
+| Jobs | 8 | 2 | 25% |
+| Interviews | 3 | 3 | 100% |
+| Interview Schedules | 4 | 4 | 100% |
+| Interview Plans | 1 | 1 | 100% |
+| Interview Stages | 2 | 0 | 0% |
+| Offers | 7 | 7 | 100% |
+| Users | 5 | 3 | 60% |
+| Feedback | 4 | 3 | 75% |
+| Archive Reasons | 1 | 1 | 100% |
+| Hiring Teams | 4 | 2 | 50% |
+| Sources | 2 | 1 | 50% |
+| Tags | 2 | 1 | 50% |
+| Custom Fields | 6 | 1 | 17% |
+| Locations | 8 | 1 | 13% |
+| Departments | 7 | 1 | 14% |
+| Interviewer Pools | 8 | 0 | 0% |
+| Projects | 3 | 0 | 0% |
+| Reports | 2 | 0 | 0% |
+| Openings | 11 | 0 | 0% |
+| Job Postings | 3 | 0 | 0% |
+| Assessments | 5 | 0 | 0% |
+| Other (admin) | ~25 | 0 | 0% |
+| **TOTAL** | **~145** | **45** | **~31%** |
 
 ---
 
@@ -17,575 +49,401 @@
 
 ## Candidates (15 endpoints)
 
-### Read Operations
-- **`candidate.info`** - Get candidate by ID
-  - Params: `{ candidateId: string }`
-  - Returns: `Candidate`
+| Endpoint | Status | Priority | Notes |
+|----------|--------|----------|-------|
+| `candidate.info` | ✅ | - | Get candidate by ID |
+| `candidate.list` | ✅ | - | List all candidates (paginated) |
+| `candidate.search` | ✅ | - | Search by name or email |
+| `candidate.listNotes` | ✅ | - | Get notes for candidate |
+| `candidate.listProjects` | ❌ | ⚪ | Get candidate projects |
+| `candidate.listClientInfo` | ❌ | ⚪ | Get client-visible info |
+| `candidate.create` | ✅ | - | Create new candidate |
+| `candidate.update` | ✅ | - | Update candidate details |
+| `candidate.createNote` | ✅ | - | Add note to candidate |
+| `candidate.addTag` | ✅ | - | Add tag to candidate |
+| `candidate.addProject` | ❌ | ⚪ | Add project to candidate |
+| `candidate.uploadFile` | ❌ | 🟡 | Upload file to candidate |
+| `candidate.uploadResume` | ❌ | 🟡 | Upload resume |
+| `candidate.anonymize` | ❌ | ⚪ | GDPR anonymization |
+| `candidate.removeTag` | ❌ | 🟡 | Remove tag from candidate |
 
-- **`candidate.list`** - List all candidates (paginated)
-  - Params: `{ cursor?: string }`
-  - Returns: `Candidate[]` (paginated)
-
-- **`candidate.search`** - Search candidates by name or email
-  - Params: `{ name?: string, email?: string }`
-  - Returns: `Candidate[]`
-
-- **`candidate.listNotes`** - Get all notes for a candidate
-  - Params: `{ candidateId: string }`
-  - Returns: `Note[]`
-
-- **`candidate.listProjects`** - Get candidate projects
-  - Params: `{ candidateId: string }`
-  - Returns: `Project[]`
-
-- **`candidate.listClientInfo`** - Get client-visible info
-  - Params: `{ candidateId: string }`
-  - Returns: `ClientInfo`
-
-### Write Operations
-- **`candidate.create`** - Create new candidate
-  - Params: `{ name: string, email: string, phoneNumber?: string, resumeFileHandle?: string, socialLinks?: SocialLink[], tags?: string[], source?: { sourceId: string } }`
-  - Returns: `Candidate`
-  - Permission: `candidatesWrite`
-
-- **`candidate.update`** - Update candidate details
-  - Params: `{ candidateId: string, name?: string, primaryEmailAddress?: string, ... }`
-  - Returns: `Candidate`
-  - Permission: `candidatesWrite`
-
-- **`candidate.createNote`** - Add note to candidate
-  - Params: `{ candidateId: string, content: string, visibility?: "Public" | "Private" }`
-  - Returns: `Note`
-  - Permission: `candidatesWrite`
-
-- **`candidate.addTag`** - Add tag to candidate
-  - Params: `{ candidateId: string, tagId: string }`
-  - Returns: `Candidate`
-  - Permission: `candidatesWrite`
-
-- **`candidate.addProject`** - Add project to candidate
-  - Params: `{ candidateId: string, projectId: string }`
-  - Returns: Success
-  - Permission: `candidatesWrite`
-
-- **`candidate.uploadFile`** - Upload file to candidate
-  - Params: `{ candidateId: string, fileHandle: string, fileName: string, fileType: string }`
-  - Returns: `File`
-  - Permission: `candidatesWrite`
-
-- **`candidate.uploadResume`** - Upload resume
-  - Params: `{ candidateId: string, fileHandle: string, fileName: string }`
-  - Returns: `Resume`
-  - Permission: `candidatesWrite`
-
-- **`candidate.anonymize`** - Anonymize candidate (GDPR)
-  - Params: `{ candidateId: string }`
-  - Returns: Success
-  - Permission: `admin`
+**Coverage: 8/15 (53%)**
 
 ---
 
 ## Applications (13 endpoints)
 
-### Read Operations
-- **`application.info`** - Get application by ID
-  - Params: `{ applicationId: string }`
-  - Returns: `Application`
+| Endpoint | Status | Priority | Notes |
+|----------|--------|----------|-------|
+| `application.info` | ✅ | - | Get application by ID |
+| `application.list` | ✅ | - | List applications (paginated) |
+| `application.listHistory` | ✅ | - | Get stage history |
+| `application.listCriteriaEvaluations` | ❌ | 🟡 | Get evaluation scores |
+| `application.create` | ✅ | - | Create application |
+| `application.update` | ❌ | ⚪ | Update application |
+| `application.changeStage` | ✅ | - | Move/archive application |
+| `application.changeSource` | ❌ | 🟡 | Change source |
+| `application.transfer` | ✅ | - | Transfer to different job |
+| `application.updateHistory` | ❌ | ⚪ | Update history entry |
+| `application.addHiringTeamMember` | ❌ | 🟡 | Add hiring team member |
+| `application.removeHiringTeamMember` | ❌ | ⚪ | Remove hiring team member |
+| `application.hire` | ❌ | 🔴 | Mark as hired |
 
-- **`application.list`** - List applications (paginated)
-  - Params: `{ jobId?: string, interviewStageId?: string, status?: "Active" | "Hired" | "Archived", cursor?: string }`
-  - Returns: `Application[]` (paginated)
-
-- **`application.listHistory`** - Get application stage history
-  - Params: `{ applicationId: string }`
-  - Returns: `ApplicationHistory[]`
-
-- **`application.listCriteriaEvaluations`** - Get evaluation scores
-  - Params: `{ applicationId: string }`
-  - Returns: `CriteriaEvaluation[]`
-
-### Write Operations
-- **`application.create`** - Create application for candidate
-  - Params: `{ candidateId: string, jobId: string, source?: { sourceId: string }, creditedToUserId?: string }`
-  - Returns: `Application`
-  - Permission: `candidatesWrite`
-
-- **`application.update`** - Update application
-  - Params: `{ applicationId: string, ... }`
-  - Returns: `Application`
-  - Permission: `candidatesWrite`
-
-- **`application.changeStage`** - Move to different stage OR archive
-  - Params: `{ applicationId: string, interviewStageId?: string, archiveReasonId?: string }`
-  - Returns: `Application`
-  - Permission: `candidatesWrite`
-
-- **`application.changeSource`** - Change application source
-  - Params: `{ applicationId: string, sourceId: string, creditedToUserId?: string }`
-  - Returns: `Application`
-  - Permission: `candidatesWrite`
-
-- **`application.transfer`** - Transfer to different job
-  - Params: `{ applicationId: string, jobId: string }`
-  - Returns: `Application`
-  - Permission: `candidatesWrite`
-
-- **`application.updateHistory`** - Update history entry
-  - Params: `{ applicationId: string, historyId: string, ... }`
-  - Returns: `ApplicationHistory`
-  - Permission: `candidatesWrite`
-
-- **`application.addHiringTeamMember`** - Add hiring team member
-  - Params: `{ applicationId: string, userId: string, roleId: string }`
-  - Returns: Success
-  - Permission: `candidatesWrite`
-
-- **`application.removeHiringTeamMember`** - Remove hiring team member
-  - Params: `{ applicationId: string, userId: string, roleId: string }`
-  - Returns: Success
-  - Permission: `candidatesWrite`
+**Coverage: 6/13 (46%)**
 
 ---
 
 ## Jobs (8 endpoints)
 
-### Read Operations
-- **`job.list`** - List all jobs (paginated)
-  - Params: `{ cursor?: string }`
-  - Returns: `Job[]` (paginated)
-  - Note: Filter by status client-side (API doesn't support status filter)
+| Endpoint | Status | Priority | Notes |
+|----------|--------|----------|-------|
+| `job.list` | ✅ | - | List all jobs |
+| `job.info` | ✅ | - | Get job by ID |
+| `job.search` | ❌ | 🟡 | Search jobs by title |
+| `job.create` | ❌ | ⚪ | Create new job |
+| `job.update` | ❌ | ⚪ | Update job details |
+| `job.setStatus` | ❌ | ⚪ | Change job status |
+| `job.updateCompensation` | ❌ | ⚪ | Update compensation |
+| `job.listHiringTeam` | ❌ | 🟡 | Get job's hiring team |
 
-- **`job.info`** - Get job by ID
-  - Params: `{ jobId: string }`
-  - Returns: `Job`
-
-- **`job.search`** - Search jobs by title
-  - Params: `{ title: string }`
-  - Returns: `Job[]`
-
-### Write Operations
-- **`job.create`** - Create new job
-  - Params: `{ title: string, departmentId?: string, locationId?: string, employmentType?: string, ... }`
-  - Returns: `Job`
-  - Permission: `jobsWrite`
-
-- **`job.update`** - Update job details
-  - Params: `{ jobId: string, title?: string, description?: string, ... }`
-  - Returns: `Job`
-  - Permission: `jobsWrite`
-
-- **`job.setStatus`** - Change job status
-  - Params: `{ jobId: string, status: "Open" | "Closed" | "Draft" }`
-  - Returns: `Job`
-  - Permission: `jobsWrite`
-
-- **`job.updateCompensation`** - Update compensation info
-  - Params: `{ jobId: string, compensationTierSummary?: string, salaryRangeMin?: number, salaryRangeMax?: number, ... }`
-  - Returns: `Job`
-  - Permission: `jobsWrite`
+**Coverage: 2/8 (25%)**
 
 ---
 
 ## Interviews (3 endpoints)
 
-### Read Operations
-- **`interview.list`** - List all interviews (paginated)
-  - Params: `{ applicationId?: string, userId?: string, startDate?: string, endDate?: string, cursor?: string }`
-  - Returns: `Interview[]` (paginated)
-  - **HIGH PRIORITY - NOT IMPLEMENTED**
+| Endpoint | Status | Priority | Notes |
+|----------|--------|----------|-------|
+| `interview.list` | ✅ | - | List all interviews |
+| `interview.info` | ✅ | - | Get interview by ID |
+| `interviewEvent.list` | ✅ | - | List interview events |
 
-- **`interview.info`** - Get interview by ID
-  - Params: `{ interviewId: string }`
-  - Returns: `Interview`
-
-- **`interviewEvent.list`** - List interview events
-  - Params: `{ interviewScheduleId?: string, cursor?: string }`
-  - Returns: `InterviewEvent[]` (paginated)
+**Coverage: 3/3 (100%)** ✅
 
 ---
 
 ## Interview Schedules (4 endpoints)
 
-### Read Operations
-- **`interviewSchedule.list`** - List interview schedules
-  - Params: `{ applicationId?: string, cursor?: string }`
-  - Returns: `InterviewSchedule[]` (paginated)
+| Endpoint | Status | Priority | Notes |
+|----------|--------|----------|-------|
+| `interviewSchedule.list` | ✅ | - | List schedules |
+| `interviewSchedule.create` | ✅ | - | Create schedule |
+| `interviewSchedule.update` | ✅ | - | Reschedule |
+| `interviewSchedule.cancel` | ✅ | - | Cancel interview |
 
-### Write Operations
-- **`interviewSchedule.create`** - Create interview schedule
-  - Params: `{ applicationId: string, interviewEvents: [{ startTime: ISO8601, endTime: ISO8601, interviewerIds: string[], location?: string, meetingLink?: string }] }`
-  - Returns: `InterviewSchedule`
-  - Permission: `interviewsWrite`
-
-- **`interviewSchedule.update`** - Update/reschedule interview
-  - Params: `{ interviewScheduleId: string, interviewEvents: [...] }`
-  - Returns: `InterviewSchedule`
-  - Permission: `interviewsWrite`
-  - **HIGH PRIORITY - NOT IMPLEMENTED**
-
-- **`interviewSchedule.cancel`** - Cancel interview
-  - Params: `{ interviewScheduleId: string, cancellationReason?: string }`
-  - Returns: Success
-  - Permission: `interviewsWrite`
-  - **HIGH PRIORITY - NOT IMPLEMENTED**
+**Coverage: 4/4 (100%)** ✅
 
 ---
 
 ## Interview Plans (1 endpoint)
 
-- **`interviewPlan.list`** - List interview plans
-  - Params: `{ includeArchived?: boolean }`
-  - Returns: `{ interviewPlans: InterviewPlan[] }`
+| Endpoint | Status | Priority | Notes |
+|----------|--------|----------|-------|
+| `interviewPlan.list` | ✅ | - | List interview plans |
+
+**Coverage: 1/1 (100%)** ✅
 
 ---
 
 ## Interview Stages (2 endpoints)
 
-- **`interviewStage.list`** - List interview stages
-  - Params: `{ cursor?: string }`
-  - Returns: `InterviewStage[]` (paginated)
+| Endpoint | Status | Priority | Notes |
+|----------|--------|----------|-------|
+| `interviewStage.list` | ❌ | 🟡 | Requires interviewPlanId; we derive from interviewPlan.list |
+| `interviewStage.info` | ❌ | ⚪ | Get stage by ID |
 
-- **`interviewStage.info`** - Get interview stage by ID
-  - Params: `{ interviewStageId: string }`
-  - Returns: `InterviewStage`
-
----
-
-## Interview Stage Groups (1 endpoint)
-
-- **`interviewStageGroup.list`** - List stage groups
-  - Params: `{ cursor?: string }`
-  - Returns: `InterviewStageGroup[]` (paginated)
+**Coverage: 0/2 (0%)** - We derive stages from interview plans instead
 
 ---
 
 ## Offers (7 endpoints)
 
-### Read Operations
-- **`offer.list`** - List all offers (paginated)
-  - Params: `{ applicationId?: string, status?: "Draft" | "Pending" | "Accepted" | "Declined" | "Expired", cursor?: string }`
-  - Returns: `Offer[]` (paginated)
-  - **CRITICAL - NOT IMPLEMENTED**
+| Endpoint | Status | Priority | Notes |
+|----------|--------|----------|-------|
+| `offer.list` | ✅ | - | List all offers |
+| `offer.info` | ✅ | - | Get offer by ID |
+| `offer.create` | ✅ | - | Create new offer |
+| `offer.update` | ✅ | - | Update offer details |
+| `offer.approve` | ✅ | - | Approve offer |
+| `offer.start` | ✅ | - | Send to candidate |
+| `offerProcess.start` | ✅ | - | Start offer process |
 
-- **`offer.info`** - Get offer by ID
-  - Params: `{ offerId: string }`
-  - Returns: `Offer`
-  - **CRITICAL - NOT IMPLEMENTED**
-
-### Write Operations
-- **`offer.create`** - Create new offer
-  - Params: `{ applicationId: string, offerProcessId: string, startDate: string, salary: number, equity?: number, signingBonus?: number, ... }`
-  - Returns: `Offer`
-  - Permission: `offersWrite`
-  - **CRITICAL - NOT IMPLEMENTED**
-
-- **`offer.update`** - Update offer details
-  - Params: `{ offerId: string, salary?: number, startDate?: string, ... }`
-  - Returns: `Offer`
-  - Permission: `offersWrite`
-  - **CRITICAL - NOT IMPLEMENTED**
-
-- **`offer.approve`** - Approve offer
-  - Params: `{ offerId: string, approverId: string }`
-  - Returns: `Offer`
-  - Permission: `offersWrite`
-  - **CRITICAL - NOT IMPLEMENTED**
-
-- **`offer.start`** - Start offer (send to candidate)
-  - Params: `{ offerId: string }`
-  - Returns: `Offer`
-  - Permission: `offersWrite`
-  - **CRITICAL - NOT IMPLEMENTED**
-
-- **`offerProcess.start`** - Start offer process for application
-  - Params: `{ applicationId: string, offerProcessId: string }`
-  - Returns: `OfferProcess`
-  - Permission: `offersWrite`
-  - **CRITICAL - NOT IMPLEMENTED**
+**Coverage: 7/7 (100%)** ✅
 
 ---
 
-## Users (4 endpoints)
+## Users (5 endpoints)
 
-- **`user.list`** - List all users (paginated)
-  - Params: `{ cursor?: string }`
-  - Returns: `User[]` (paginated)
+| Endpoint | Status | Priority | Notes |
+|----------|--------|----------|-------|
+| `user.list` | ✅ | - | List all users |
+| `user.info` | ✅ | - | Get user by ID |
+| `user.search` | ✅ | - | Search by name/email |
+| `user.interviewerSettings` | ❌ | ⚪ | Get interviewer settings |
+| `user.updateInterviewerSettings` | ❌ | ⚪ | Update interviewer settings |
 
-- **`user.info`** - Get user by ID
-  - Params: `{ userId: string }`
-  - Returns: `User`
-
-- **`user.search`** - Search users by name or email
-  - Params: `{ name?: string, email?: string }`
-  - Returns: `User[]`
-
-- **`user.interviewerSettings`** - Get interviewer settings
-  - Params: `{ userId: string }`
-  - Returns: `InterviewerSettings`
-
-- **`user.updateInterviewerSettings`** - Update interviewer settings
-  - Params: `{ userId: string, ... }`
-  - Returns: `InterviewerSettings`
-  - Permission: `usersWrite`
+**Coverage: 3/5 (60%)**
 
 ---
 
-## Application Feedback (2 endpoints)
+## Feedback (4 endpoints)
 
-- **`applicationFeedback.list`** - List feedback for application
-  - Params: `{ applicationId: string }`
-  - Returns: `{ feedbackSubmissions: FeedbackSubmission[] }`
+| Endpoint | Status | Priority | Notes |
+|----------|--------|----------|-------|
+| `applicationFeedback.list` | ✅ | - | List feedback for app |
+| `applicationFeedback.submit` | ❌ | 🟡 | Submit feedback |
+| `feedbackSubmission.list` | ✅ | - | List submissions |
+| `feedbackSubmission.info` | ✅ | - | Get submission details |
 
-- **`applicationFeedback.submit`** - Submit interview feedback
-  - Params: `{ applicationId: string, interviewId: string, feedbackFormId: string, overallRecommendation?: string, overallRating?: number, fieldSubmissions: [...] }`
-  - Returns: `FeedbackSubmission`
-  - Permission: `feedbackWrite`
+**Coverage: 3/4 (75%)**
 
 ---
 
 ## Archive Reasons (1 endpoint)
 
-- **`archiveReason.list`** - List rejection/archive reasons
-  - Params: `{}`
-  - Returns: `{ archiveReasons: ArchiveReason[] }`
+| Endpoint | Status | Priority | Notes |
+|----------|--------|----------|-------|
+| `archiveReason.list` | ✅ | - | List rejection reasons |
+
+**Coverage: 1/1 (100%)** ✅
 
 ---
 
-## Hiring Teams (3 endpoints)
+## Hiring Teams (4 endpoints)
 
-- **`hiringTeam.addMember`** - Add member to hiring team
-  - Params: `{ jobId: string, userId: string, roleId: string }`
-  - Returns: Success
-  - Permission: `jobsWrite`
+| Endpoint | Status | Priority | Notes |
+|----------|--------|----------|-------|
+| `hiringTeamRole.list` | ✅ | - | List hiring team roles |
+| `applicationHiringTeamRole.list` | ✅ | - | List roles for application |
+| `hiringTeam.addMember` | ❌ | 🟡 | Add member to job team |
+| `hiringTeam.removeMember` | ❌ | ⚪ | Remove member |
 
-- **`hiringTeam.removeMember`** - Remove member from hiring team
-  - Params: `{ jobId: string, userId: string, roleId: string }`
-  - Returns: Success
-  - Permission: `jobsWrite`
-
-- **`hiringTeamRole.list`** - List hiring team roles
-  - Params: `{}`
-  - Returns: `HiringTeamRole[]`
-
-- **`applicationHiringTeamRole.list`** - List roles for application
-  - Params: `{ applicationId: string }`
-  - Returns: `ApplicationHiringTeamRole[]`
-
----
-
-## Interviewer Pools (8 endpoints)
-
-- **`interviewerPool.list`** - List interviewer pools
-  - Params: `{ cursor?: string }`
-  - Returns: `InterviewerPool[]` (paginated)
-
-- **`interviewerPool.info`** - Get pool details
-  - Params: `{ interviewerPoolId: string }`
-  - Returns: `InterviewerPool`
-
-- **`interviewerPool.create`** - Create pool
-  - Params: `{ name: string, interviewStageId: string }`
-  - Returns: `InterviewerPool`
-  - Permission: `interviewsWrite`
-
-- **`interviewerPool.update`** - Update pool
-  - Params: `{ interviewerPoolId: string, name?: string, ... }`
-  - Returns: `InterviewerPool`
-  - Permission: `interviewsWrite`
-
-- **`interviewerPool.archive`** - Archive pool
-  - Params: `{ interviewerPoolId: string }`
-  - Returns: Success
-  - Permission: `interviewsWrite`
-
-- **`interviewerPool.restore`** - Restore archived pool
-  - Params: `{ interviewerPoolId: string }`
-  - Returns: Success
-  - Permission: `interviewsWrite`
-
-- **`interviewerPool.addUser`** - Add interviewer to pool
-  - Params: `{ interviewerPoolId: string, userId: string }`
-  - Returns: Success
-  - Permission: `interviewsWrite`
-
-- **`interviewerPool.removeUser`** - Remove interviewer from pool
-  - Params: `{ interviewerPoolId: string, userId: string }`
-  - Returns: Success
-  - Permission: `interviewsWrite`
-
----
-
-## Custom Fields (6 endpoints)
-
-- **`customField.list`** - List custom fields
-  - Params: `{ objectType?: "Candidate" | "Application" | "Job" | "Opening" }`
-  - Returns: `CustomField[]`
-
-- **`customField.info`** - Get custom field details
-  - Params: `{ customFieldId: string }`
-  - Returns: `CustomField`
-
-- **`customField.create`** - Create custom field
-  - Params: `{ title: string, objectType: string, fieldType: string, ... }`
-  - Returns: `CustomField`
-  - Permission: `customFieldsWrite`
-
-- **`customField.setValue`** - Set custom field value
-  - Params: `{ customFieldId: string, objectId: string, value: any }`
-  - Returns: Success
-  - Permission: `customFieldsWrite`
-
-- **`customField.setValues`** - Set multiple custom field values
-  - Params: `{ objectId: string, values: [{ customFieldId: string, value: any }] }`
-  - Returns: Success
-  - Permission: `customFieldsWrite`
-
-- **`customField.updateSelectableValues`** - Update dropdown options
-  - Params: `{ customFieldId: string, selectableValues: string[] }`
-  - Returns: `CustomField`
-  - Permission: `customFieldsWrite`
-
----
-
-## Candidate Tags (2 endpoints)
-
-- **`candidateTag.list`** - List all tags
-  - Params: `{}`
-  - Returns: `CandidateTag[]`
-
-- **`candidateTag.create`** - Create new tag
-  - Params: `{ title: string, isArchived?: boolean }`
-  - Returns: `CandidateTag`
-  - Permission: `candidatesWrite`
-
----
-
-## Projects (3 endpoints)
-
-- **`project.list`** - List projects
-  - Params: `{ cursor?: string }`
-  - Returns: `Project[]` (paginated)
-
-- **`project.info`** - Get project details
-  - Params: `{ projectId: string }`
-  - Returns: `Project`
-
-- **`project.search`** - Search projects
-  - Params: `{ title: string }`
-  - Returns: `Project[]`
-
----
-
-## Reports (2 endpoints)
-
-- **`report.generate`** - Generate async report
-  - Params: `{ reportType: string, parameters: object }`
-  - Returns: `{ reportId: string }`
-  - Permission: `reportsRead`
-
-- **`report.synchronous`** - Generate sync report
-  - Params: `{ reportType: string, parameters: object }`
-  - Returns: Report data
-  - Permission: `reportsRead`
-
----
-
-## Openings (11 endpoints)
-
-- **`opening.list`** - List openings/requisitions
-- **`opening.info`** - Get opening details
-- **`opening.search`** - Search openings
-- **`opening.create`** - Create opening
-- **`opening.update`** - Update opening
-- **`opening.addJob`** - Link job to opening
-- **`opening.removeJob`** - Unlink job
-- **`opening.addLocation`** - Add location
-- **`opening.removeLocation`** - Remove location
-- **`opening.setOpeningState`** - Change state
-- **`opening.setArchived`** - Archive opening
-
----
-
-## Job Postings (3 endpoints)
-
-- **`jobPosting.list`** - List job postings
-  - Params: `{ jobId?: string, cursor?: string }`
-  - Returns: `JobPosting[]` (paginated)
-
-- **`jobPosting.info`** - Get posting details
-  - Params: `{ jobPostingId: string }`
-  - Returns: `JobPosting`
-
-- **`jobPosting.update`** - Update posting
-  - Params: `{ jobPostingId: string, ... }`
-  - Returns: `JobPosting`
-  - Permission: `jobsWrite`
+**Coverage: 2/4 (50%)**
 
 ---
 
 ## Sources (2 endpoints)
 
-- **`source.list`** - List candidate sources
-  - Params: `{}`
-  - Returns: `Source[]`
+| Endpoint | Status | Priority | Notes |
+|----------|--------|----------|-------|
+| `source.list` | ✅ | - | List candidate sources |
+| `sourceTrackingLink.list` | ❌ | ⚪ | List tracking links |
 
-- **`sourceTrackingLink.list`** - List tracking links
-  - Params: `{ sourceId?: string }`
-  - Returns: `SourceTrackingLink[]`
+**Coverage: 1/2 (50%)**
 
 ---
 
-## Departments (7 endpoints)
+## Candidate Tags (2 endpoints)
 
-- **`department.list`**, **`department.info`**, **`department.create`**
-- **`department.update`**, **`department.archive`**, **`department.restore`**, **`department.move`**
+| Endpoint | Status | Priority | Notes |
+|----------|--------|----------|-------|
+| `candidateTag.list` | ✅ | - | List all tags |
+| `candidateTag.create` | ❌ | 🟡 | Create new tag |
+
+**Coverage: 1/2 (50%)**
+
+---
+
+## Custom Fields (6 endpoints)
+
+| Endpoint | Status | Priority | Notes |
+|----------|--------|----------|-------|
+| `customField.list` | ✅ | - | List custom fields |
+| `customField.info` | ❌ | ⚪ | Get field details |
+| `customField.create` | ❌ | ⚪ | Create custom field |
+| `customField.setValue` | ❌ | 🟡 | Set field value |
+| `customField.setValues` | ❌ | ⚪ | Set multiple values |
+| `customField.updateSelectableValues` | ❌ | ⚪ | Update dropdown options |
+
+**Coverage: 1/6 (17%)**
 
 ---
 
 ## Locations (8 endpoints)
 
-- **`location.list`**, **`location.info`**, **`location.create`**
-- **`location.archive`**, **`location.restore`**, **`location.move`**
-- **`location.updateName`**, **`location.updateaddress`**, **`location.updateremotestatus`**, **`location.updateworkplacetype`**
+| Endpoint | Status | Priority | Notes |
+|----------|--------|----------|-------|
+| `location.list` | ✅ | - | List locations |
+| `location.info` | ❌ | ⚪ | Get location details |
+| `location.create` | ❌ | ⚪ | Create location |
+| `location.archive` | ❌ | ⚪ | Archive location |
+| `location.restore` | ❌ | ⚪ | Restore location |
+| `location.move` | ❌ | ⚪ | Move in hierarchy |
+| `location.updateName` | ❌ | ⚪ | Update name |
+| `location.updateAddress` | ❌ | ⚪ | Update address |
+
+**Coverage: 1/8 (13%)**
+
+---
+
+## Departments (7 endpoints)
+
+| Endpoint | Status | Priority | Notes |
+|----------|--------|----------|-------|
+| `department.list` | ✅ | - | List departments |
+| `department.info` | ❌ | ⚪ | Get department details |
+| `department.create` | ❌ | ⚪ | Create department |
+| `department.update` | ❌ | ⚪ | Update department |
+| `department.archive` | ❌ | ⚪ | Archive department |
+| `department.restore` | ❌ | ⚪ | Restore department |
+| `department.move` | ❌ | ⚪ | Move in hierarchy |
+
+**Coverage: 1/7 (14%)**
+
+---
+
+## Interviewer Pools (8 endpoints)
+
+| Endpoint | Status | Priority | Notes |
+|----------|--------|----------|-------|
+| `interviewerPool.list` | ❌ | ⚪ | List pools |
+| `interviewerPool.info` | ❌ | ⚪ | Get pool details |
+| `interviewerPool.create` | ❌ | ⚪ | Create pool |
+| `interviewerPool.update` | ❌ | ⚪ | Update pool |
+| `interviewerPool.archive` | ❌ | ⚪ | Archive pool |
+| `interviewerPool.restore` | ❌ | ⚪ | Restore pool |
+| `interviewerPool.addUser` | ❌ | ⚪ | Add user to pool |
+| `interviewerPool.removeUser` | ❌ | ⚪ | Remove user |
+
+**Coverage: 0/8 (0%)** - Admin function, not needed for recruiters
+
+---
+
+## Projects (3 endpoints)
+
+| Endpoint | Status | Priority | Notes |
+|----------|--------|----------|-------|
+| `project.list` | ❌ | ⚪ | List projects |
+| `project.info` | ❌ | ⚪ | Get project details |
+| `project.search` | ❌ | ⚪ | Search projects |
+
+**Coverage: 0/3 (0%)** - Rarely used feature
+
+---
+
+## Reports (2 endpoints)
+
+| Endpoint | Status | Priority | Notes |
+|----------|--------|----------|-------|
+| `report.generate` | ❌ | 🟡 | Generate async report |
+| `report.synchronous` | ❌ | 🟡 | Generate sync report |
+
+**Coverage: 0/2 (0%)** - Could be valuable for analytics
+
+---
+
+## Openings/Requisitions (11 endpoints)
+
+| Endpoint | Status | Priority | Notes |
+|----------|--------|----------|-------|
+| `opening.list` | ❌ | ⚪ | List openings |
+| `opening.info` | ❌ | ⚪ | Get opening details |
+| `opening.search` | ❌ | ⚪ | Search openings |
+| `opening.create` | ❌ | ⚪ | Create opening |
+| `opening.update` | ❌ | ⚪ | Update opening |
+| `opening.addJob` | ❌ | ⚪ | Link job |
+| `opening.removeJob` | ❌ | ⚪ | Unlink job |
+| `opening.addLocation` | ❌ | ⚪ | Add location |
+| `opening.removeLocation` | ❌ | ⚪ | Remove location |
+| `opening.setOpeningState` | ❌ | ⚪ | Change state |
+| `opening.setArchived` | ❌ | ⚪ | Archive |
+
+**Coverage: 0/11 (0%)** - Enterprise feature
+
+---
+
+## Job Postings (3 endpoints)
+
+| Endpoint | Status | Priority | Notes |
+|----------|--------|----------|-------|
+| `jobPosting.list` | ❌ | ⚪ | List postings |
+| `jobPosting.info` | ❌ | ⚪ | Get posting details |
+| `jobPosting.update` | ❌ | ⚪ | Update posting |
+
+**Coverage: 0/3 (0%)** - Usually managed in Ashby UI
 
 ---
 
 ## Assessments (5 endpoints)
 
-- **`assessment.list`**, **`assessment.start`**, **`assessment.update`**, **`assessment.cancel`**, **`assessment.addCompletedToCandidate`**
+| Endpoint | Status | Priority | Notes |
+|----------|--------|----------|-------|
+| `assessment.list` | ❌ | ⚪ | List assessments |
+| `assessment.start` | ❌ | ⚪ | Start assessment |
+| `assessment.update` | ❌ | ⚪ | Update assessment |
+| `assessment.cancel` | ❌ | ⚪ | Cancel assessment |
+| `assessment.addCompletedToCandidate` | ❌ | ⚪ | Add completed |
+
+**Coverage: 0/5 (0%)** - Integration-specific
 
 ---
 
-## Other Categories (Low Priority)
+## Other Categories (Low Priority ~25 endpoints)
 
-- **Webhooks** (4 endpoints): `webhook.create`, `webhook.update`, `webhook.info`, `webhook.delete`
-- **Surveys** (5 endpoints): Survey forms, requests, and submissions
-- **Referrals** (2 endpoints): `referral.create`, `referralForm.info`
-- **Communication Templates** (1 endpoint): `communicationTemplate.list`
-- **Feedback Form Definitions** (2 endpoints): `feedbackFormDefinition.list`, `feedbackFormDefinition.info`
-- **Close Reasons** (1 endpoint): `closeReason.list`
-- **Job Templates** (1 endpoint): `jobTemplate.list`
-- **Job Boards** (1 endpoint): `jobBoard.list`
-- **Approvals** (2 endpoints): `approval.list`, `approvalDefinition.update`
-- **Application Forms** (1 endpoint): `applicationForm.submit` (public endpoint)
-- **Files** (1 endpoint): `file.info`
-- **Brand** (1 endpoint): `brand.list`
-- **API Key** (1 endpoint): `apiKey.info`
+| Category | Endpoints | Status | Notes |
+|----------|-----------|--------|-------|
+| Webhooks | 4 | ❌ | Admin config |
+| Surveys | 5 | ❌ | Rarely via chat |
+| Referrals | 2 | ❌ | Could add |
+| Communication Templates | 1 | ❌ | Admin |
+| Feedback Form Definitions | 2 | ❌ | Admin |
+| Close Reasons | 1 | ❌ | Similar to archive |
+| Job Templates | 1 | ❌ | Admin |
+| Job Boards | 1 | ❌ | Admin |
+| Approvals | 2 | ❌ | Could add |
+| Application Forms | 1 | ❌ | Public endpoint |
+| Files | 1 | ❌ | Could add |
+| Brand | 1 | ❌ | Admin |
+| API Key | 1 | ❌ | Admin |
 
----
-
-## Implementation Status Legend
-
-- ✅ **Implemented** - Available in current codebase
-- ❌ **Not Implemented** - Missing
-- 🔴 **HIGH PRIORITY** - Critical for workflows
-- 🟡 **MEDIUM PRIORITY** - Valuable for power users
-- ⚪ **LOW PRIORITY** - Nice to have
+**Coverage: 0/~25 (0%)** - Mostly admin/config functions
 
 ---
 
-**Total Endpoints:** 200+
-**Currently Implemented:** 22 (11%)
-**Phase 1 Target:** 32 (16%)
-**Phase 2 Target:** 52 (26%)
-**Phase 3 Target:** 65 (33%)
+## Priority Legend
+
+| Symbol | Meaning | Action |
+|--------|---------|--------|
+| ✅ | Implemented | Done |
+| 🔴 | High Priority | Critical for workflows |
+| 🟡 | Medium Priority | Valuable for power users |
+| ⚪ | Low Priority | Nice to have / Admin only |
+
+---
+
+## High Priority Missing Endpoints
+
+These endpoints would add significant value:
+
+1. **`application.hire`** 🔴 - Mark candidate as hired
+2. **`candidate.uploadResume`** 🟡 - Upload resume files
+3. **`candidate.removeTag`** 🟡 - Remove tags
+4. **`job.search`** 🟡 - Search jobs by title
+5. **`application.changeSource`** 🟡 - Update source tracking
+6. **`application.addHiringTeamMember`** 🟡 - Modify hiring team
+7. **`applicationFeedback.submit`** 🟡 - Submit feedback via bot
+8. **`candidateTag.create`** 🟡 - Create new tags
+9. **`customField.setValue`** 🟡 - Set custom field values
+10. **`report.synchronous`** 🟡 - Generate reports
+
+---
+
+## Implementation Summary
+
+**Total Ashby API Endpoints:** ~145 (documented)
+**Currently Implemented:** 45 (31%)
+
+### By Workflow Coverage:
+
+| Workflow | Status |
+|----------|--------|
+| Candidate search & lookup | ✅ Complete |
+| Application management | ✅ Complete |
+| Interview scheduling | ✅ Complete |
+| Offer management | ✅ Complete |
+| Pipeline visibility | ✅ Complete |
+| Feedback viewing | ✅ Complete |
+| Feedback submission | ❌ Missing |
+| File uploads | ❌ Missing |
+| Report generation | ❌ Missing |
+| Admin/config | ❌ Not needed |

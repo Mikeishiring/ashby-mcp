@@ -181,6 +181,10 @@ export const ashbyTools: Tool[] = [
           type: "string",
           description: "The candidate ID",
         },
+        application_id: {
+          type: "string",
+          description: "Application ID to use when a candidate has multiple active applications",
+        },
         name_or_email: {
           type: "string",
           description: "Name or email to find the candidate (if candidate_id not known)",
@@ -209,6 +213,10 @@ export const ashbyTools: Tool[] = [
         candidate_id: {
           type: "string",
           description: "The candidate ID",
+        },
+        application_id: {
+          type: "string",
+          description: "Application ID to use when a candidate has multiple active applications",
         },
         name_or_email: {
           type: "string",
@@ -254,6 +262,10 @@ export const ashbyTools: Tool[] = [
           type: "string",
           description: "The candidate ID",
         },
+        application_id: {
+          type: "string",
+          description: "Application ID to use when a candidate has multiple active applications",
+        },
         name_or_email: {
           type: "string",
           description: "Name or email to find the candidate (if candidate_id not known)",
@@ -272,6 +284,10 @@ export const ashbyTools: Tool[] = [
         candidate_id: {
           type: "string",
           description: "Candidate ID to get feedback for (will find their active application)",
+        },
+        application_id: {
+          type: "string",
+          description: "Application ID to use when a candidate has multiple active applications",
         },
         candidate_name: {
           type: "string",
@@ -347,6 +363,10 @@ export const ashbyTools: Tool[] = [
           type: "string",
           description: "The candidate ID",
         },
+        application_id: {
+          type: "string",
+          description: "Application ID to use when a candidate has multiple active applications",
+        },
         name_or_email: {
           type: "string",
           description: "Name or email to find the candidate (if candidate_id not known)",
@@ -379,6 +399,10 @@ export const ashbyTools: Tool[] = [
         candidate_id: {
           type: "string",
           description: "The candidate ID",
+        },
+        application_id: {
+          type: "string",
+          description: "Application ID to use when a candidate has multiple active applications",
         },
         name_or_email: {
           type: "string",
@@ -533,7 +557,7 @@ export const ashbyTools: Tool[] = [
   {
     name: "list_interview_events",
     description:
-      "List interview events (individual interview sessions). Can filter by interview schedule ID.",
+      "List interview events (individual interview sessions) for a specific interview schedule.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -542,7 +566,7 @@ export const ashbyTools: Tool[] = [
           description: "Filter by specific interview schedule",
         },
       },
-      required: [],
+      required: ["interview_schedule_id"],
     },
   },
 
@@ -552,7 +576,7 @@ export const ashbyTools: Tool[] = [
   {
     name: "start_triage",
     description:
-      "Start a rapid triage session for reviewing candidates. Returns candidates one-by-one for quick decisions via emoji reactions (✅=advance, ❌=reject, 🤔=skip).",
+      "Start a rapid triage session for reviewing candidates. Returns candidates one-by-one for quick decisions via emoji reactions (✅=mark advance, ❌=mark reject, 🤔=skip). Review-only; no changes are applied.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -586,6 +610,10 @@ export const ashbyTools: Tool[] = [
         candidate_id: {
           type: "string",
           description: "The candidate ID",
+        },
+        application_id: {
+          type: "string",
+          description: "Application ID to use when a candidate has multiple active applications",
         },
         name_or_email: {
           type: "string",
@@ -641,6 +669,10 @@ export const ashbyTools: Tool[] = [
           type: "string",
           description: "The candidate ID",
         },
+        application_id: {
+          type: "string",
+          description: "Application ID to use when a candidate has multiple active applications",
+        },
         name_or_email: {
           type: "string",
           description: "Name or email to find the candidate (if candidate_id not known)",
@@ -667,6 +699,10 @@ export const ashbyTools: Tool[] = [
         candidate_id: {
           type: "string",
           description: "Filter offers for a specific candidate",
+        },
+        application_id: {
+          type: "string",
+          description: "Filter offers for a specific application",
         },
         status: {
           type: "string",
@@ -752,6 +788,10 @@ export const ashbyTools: Tool[] = [
           type: "number",
           description: "Relocation bonus amount (optional)",
         },
+        variable_compensation: {
+          type: "number",
+          description: "Variable compensation amount (optional)",
+        },
         notes: {
           type: "string",
           description: "Internal notes about the offer",
@@ -786,6 +826,14 @@ export const ashbyTools: Tool[] = [
         signing_bonus: {
           type: "number",
           description: "New signing bonus",
+        },
+        relocation_bonus: {
+          type: "number",
+          description: "New relocation bonus",
+        },
+        variable_compensation: {
+          type: "number",
+          description: "New variable compensation",
         },
         notes: {
           type: "string",
@@ -836,13 +884,17 @@ export const ashbyTools: Tool[] = [
   {
     name: "list_all_interviews",
     description:
-      "List all interviews, optionally filtered by application, interviewer, or date range.",
+      "List interviews filtered by application, interviewer, or date range.",
     input_schema: {
       type: "object" as const,
       properties: {
         candidate_id: {
           type: "string",
           description: "Filter by candidate (will find their application)",
+        },
+        application_id: {
+          type: "string",
+          description: "Filter by application ID",
         },
         user_id: {
           type: "string",
@@ -959,7 +1011,7 @@ export const ashbyTools: Tool[] = [
         },
         source_id: {
           type: "string",
-          description: "Source ID for tracking (use get_sources to find IDs)",
+          description: "Source ID for tracking (use list_candidate_sources to find IDs)",
         },
         tags: {
           type: "array",
@@ -1015,6 +1067,10 @@ export const ashbyTools: Tool[] = [
         candidate_id: {
           type: "string",
           description: "Candidate ID whose application to transfer",
+        },
+        application_id: {
+          type: "string",
+          description: "Application ID to transfer when a candidate has multiple active applications",
         },
         candidate_name: {
           type: "string",
@@ -1077,6 +1133,10 @@ export const ashbyTools: Tool[] = [
         candidate_id: {
           type: "string",
           description: "Candidate ID (will resolve from name/email if not provided)",
+        },
+        application_id: {
+          type: "string",
+          description: "Application ID to use when a candidate has multiple active applications",
         },
         candidate_name: {
           type: "string",

@@ -1,6 +1,6 @@
 # Ashby Recruiting Assistant 🤖
 
-**Your AI teammate for managing candidates in Ashby - now with 51 tools and 85% API coverage**
+**Your AI teammate for managing candidates in Ashby - 52 tools covering core recruiter workflows**
 
 ---
 
@@ -71,7 +71,7 @@ An AI-powered recruiting assistant that lives in Slack and connects to your Ashb
 - Access custom fields
 - View complete candidate journeys
 
-**Total capabilities:** 51 tools, 54 API endpoints, 85% coverage of high-value recruiter workflows
+**Total capabilities:** 52 tools (37 read, 15 write), 45 API endpoints covered
 
 ---
 
@@ -125,6 +125,13 @@ Handle routine tasks instantly
 - Add new candidates
 - Reject applications
 - Set reminders
+
+### 🔮 Proactive Analysis
+AI-powered status insights
+- Analyze individual candidate status with blocker detection
+- Batch analyze candidates to identify who's stuck and why
+- Priority rankings and suggested next actions
+- Intelligent grouping by blocker type
 
 ### 🏷️ Organization
 Keep candidates organized
@@ -243,13 +250,14 @@ Slack → Claude AI (Anthropic) → Ashby API → Your ATS
 - Ashby API key (with permissions)
 - Anthropic API key (for Claude)
 - Slack Bot token (for messaging)
-- Node.js 18+ or Docker
+- Slack App token (for Socket Mode)
+- Node.js 20+ or Docker
 
 ### API Coverage
-- **51 total tools** (38 read, 13 write)
-- **54 Ashby API endpoints** covered
-- **85% of high-value recruiter workflows**
+- **52 total tools** (37 read, 15 write)
+- **45 of ~145 Ashby API endpoints** (31% of API, 100% of core workflows)
 - **100% TypeScript type-safe**
+- See [API-ENDPOINT-REFERENCE.md](docs/API-ENDPOINT-REFERENCE.md) for full mapping
 
 ---
 
@@ -308,13 +316,31 @@ npm start
 ASHBY_API_KEY=your_ashby_key_here
 ANTHROPIC_API_KEY=your_anthropic_key_here
 SLACK_BOT_TOKEN=xoxb-your-slack-token-here
-SLACK_CHANNEL_ID=C1234567890
+SLACK_APP_TOKEN=xapp-your-app-token-here
 
 # Optional - Customize behavior
-STALE_THRESHOLD_DAYS=14          # When candidates are "stale"
-MAX_CANDIDATES_MOVE=2            # Batch operation safety limit
-ANTHROPIC_MODEL=claude-sonnet-4  # AI model to use
-ANTHROPIC_MAX_TOKENS=4096        # Response length limit
+SLACK_SIGNING_SECRET=your-signing-secret
+ASHBY_BASE_URL=https://api.ashbyhq.com
+ANTHROPIC_MODEL=claude-sonnet-4-20250514
+ANTHROPIC_MAX_TOKENS=4096
+
+SAFETY_MODE=CONFIRM_ALL
+BATCH_LIMIT=2
+CONFIRMATION_TIMEOUT_MS=300000
+
+DAILY_SUMMARY_ENABLED=true
+DAILY_SUMMARY_TIME=09:00
+DAILY_SUMMARY_TIMEZONE=America/New_York
+DAILY_SUMMARY_CHANNEL=C0123456789
+
+PIPELINE_ALERTS_ENABLED=false
+PIPELINE_ALERTS_TIME=09:00
+PIPELINE_ALERTS_TIMEZONE=America/New_York
+PIPELINE_ALERTS_CHANNEL=C0123456789
+PIPELINE_ALERTS_STALE_THRESHOLD=3
+PIPELINE_ALERTS_DECISION_THRESHOLD=2
+
+STALE_DAYS=14
 ```
 
 ---
@@ -452,4 +478,4 @@ Built with:
 
 ---
 
-*Last Updated: 2026-01-20 | Version 3.0 | 51 tools | 85% API coverage*
+*Last Updated: 2026-01-22 | Version 3.0 | 52 tools | 45/145 API endpoints (31%)*

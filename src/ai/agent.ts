@@ -16,6 +16,7 @@ import { ashbyTools, isWriteTool } from "./tools.js";
 import { ToolExecutor } from "./executor.js";
 import type { AshbyService } from "../ashby/service.js";
 import type { SafetyGuards } from "../safety/guards.js";
+import type { ApplicationWithContext } from "../types/index.js";
 
 const SYSTEM_PROMPT = `You're a recruiting assistant helping manage the Ashby ATS pipeline through Slack. Think of yourself as a helpful teammate who can quickly look up candidate info, track pipeline status, and handle routine recruiting tasks.
 
@@ -46,10 +47,11 @@ You can tag candidates to keep things organized (like "Python Developer" or "Sen
 Keep responses short unless someone asks for details. Always include the candidate's email when talking about specific people so there's no confusion. Be proactive about suggesting actions when you spot problems or opportunities to move things forward.
 
 When showing candidate info (queries like "who is X", "show me X", "info about X", "what's the update on X", "where is X", "X status", "how's X doing"):
-1. First call get_candidate_scorecard to fetch their interview feedback ratings
-2. Map the attributeRatings to emojis: Talent→⚡, Vibes→✨, Nerdsniped→🎯, Communication/Comms→💬
-3. Use averageRating for each (scale 1-5)
-4. Format as:
+1. First call get_candidate_scorecard (use application_id if provided) to fetch feedback
+2. If attributeRatings include Talent/Vibes/Nerdsniped/Communication, map them to ⚡/✨/🎯/💬
+3. If those categories are missing, show up to 4 numeric attributes with their titles and average ratings instead
+4. If no numeric ratings exist, omit the score line
+5. Format as:
 \`\`\`
 Name | Role | Stage: Current Stage
 ⚡3.3  ✨2.7  🎯3.0  💬3.3
@@ -58,7 +60,13 @@ Name | Role | Stage: Current Stage
 🕐 Last: [most recent activity with date]
 📝 Notes: [key observations from scorecard pros/cons]
 \`\`\`
-If no scorecard exists yet, omit the scores line. Always show stage, next action, and last activity.`;
+If no scorecard exists yet, omit the scores line. Always show stage, next action, and last activity.
+
+When a user asks for full or detailed feedback:
+1. Call list_feedback_submissions with candidate/application info.
+2. For each submission (limit 5), call get_feedback_details.
+3. Summarize each submission with interviewer, submitted date, overall rating/recommendation if present, and key field submissions.
+4. Do not assume fields exist; if a field is missing, say "Not provided".`;
 
 export class ClaudeAgent {
   private readonly client: Anthropic;
@@ -95,6 +103,7 @@ export class ClaudeAgent {
     messages: MessageParam[]
   ): Promise<AgentResponse> {
     const pendingConfirmations: PendingWriteOperation[] = [];
+    let triageData: TriageSessionData | null = null;
 
     // Tool use loop
     while (true) {
@@ -114,6 +123,7 @@ export class ClaudeAgent {
         return {
           text: textContent?.text ?? "",
           pendingConfirmations,
+          ...(triageData ? { triage: triageData } : {}),
         };
       }
 
@@ -129,18 +139,29 @@ export class ClaudeAgent {
               toolUse.input as Record<string, unknown>
             );
 
+            if (toolUse.name === "start_triage" && result.success && result.data) {
+              triageData = result.data as TriageSessionData;
+            }
+
             if (result.requiresConfirmation && result.data) {
               // Store pending confirmation
               const data = result.data as {
-                candidateId: string;
+                candidateId?: string;
                 toolName: string;
                 input: Record<string, unknown>;
               };
-              pendingConfirmations.push({
-                toolName: data.toolName,
-                candidateId: data.candidateId,
-                input: data.input,
-              });
+              if (data.candidateId) {
+                pendingConfirmations.push({
+                  toolName: data.toolName,
+                  candidateId: data.candidateId,
+                  input: data.input,
+                });
+              } else {
+                pendingConfirmations.push({
+                  toolName: data.toolName,
+                  input: data.input,
+                });
+              }
 
               // Tell Claude confirmation is needed
               toolResults.push({
@@ -149,7 +170,7 @@ export class ClaudeAgent {
                 content: JSON.stringify({
                   status: "confirmation_required",
                   message: `This ${isWriteTool(toolUse.name) ? "write" : ""} operation requires user confirmation. Please describe the action and ask the user to confirm with ✅ or cancel with ❌.`,
-                  candidateId: data.candidateId,
+                  ...(data.candidateId ? { candidateId: data.candidateId } : {}),
                 }),
               });
             } else if (result.success) {
@@ -180,6 +201,7 @@ export class ClaudeAgent {
         return {
           text: textContent?.text ?? "I encountered an unexpected situation. Please try again.",
           pendingConfirmations,
+          ...(triageData ? { triage: triageData } : {}),
         };
       }
     }
@@ -215,10 +237,17 @@ export class ClaudeAgent {
 export interface AgentResponse {
   text: string;
   pendingConfirmations: PendingWriteOperation[];
+  triage?: TriageSessionData;
 }
 
 export interface PendingWriteOperation {
   toolName: string;
-  candidateId: string;
+  candidateId?: string;
   input: Record<string, unknown>;
+}
+
+export interface TriageSessionData {
+  candidates: ApplicationWithContext[];
+  message: string;
+  triageMode?: boolean;
 }

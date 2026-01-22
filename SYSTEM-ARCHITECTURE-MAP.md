@@ -259,7 +259,7 @@ Response: "3 candidates ready for offers:
 | `get_pending_offers` | `offer.list` + filter | ⭐⭐⭐ Medium | Medium |
 | `list_all_interviews` | `interview.list` | ⭐⭐ Low | Low |
 | `get_upcoming_interviews` | `interview.list` + filter | ⭐⭐⭐ Medium | Medium |
-| `get_candidate_scorecard` | `feedbackFormDefinition.list` + `feedbackSubmission.list` | ⭐⭐ Low | High |
+| `get_candidate_scorecard` | `applicationFeedback.list` | ⭐⭐ Low | High |
 
 ### Write Operations (10 tools)
 

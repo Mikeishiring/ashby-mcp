@@ -6,7 +6,7 @@
 
 import { App, LogLevel } from "@slack/bolt";
 import type { Config } from "../config/index.js";
-import type { ClaudeAgent, PendingWriteOperation } from "../ai/agent.js";
+import type { ClaudeAgent, PendingWriteOperation, TriageSessionData } from "../ai/agent.js";
 import type { ConfirmationManager } from "../safety/confirmations.js";
 import type { ReminderManager } from "../reminders/index.js";
 import type { TriageSessionManager } from "../triage/index.js";
@@ -17,12 +17,13 @@ export class SlackBot {
   private readonly agent: ClaudeAgent;
   private readonly confirmations: ConfirmationManager;
   private readonly triageSessions: TriageSessionManager;
+  private readonly reminders: ReminderManager | undefined;
 
   constructor(
     config: Config,
     agent: ClaudeAgent,
     confirmations: ConfirmationManager,
-    _reminders?: ReminderManager,
+    reminders?: ReminderManager,
     triageSessions?: TriageSessionManager
   ) {
     this.app = new App({
@@ -34,6 +35,7 @@ export class SlackBot {
 
     this.agent = agent;
     this.confirmations = confirmations;
+    this.reminders = reminders;
     this.triageSessions = triageSessions!;
 
     this.setupEventHandlers();
@@ -169,21 +171,13 @@ export class SlackBot {
   ): Promise<void> {
     try {
       // Show typing indicator
-      await this.app.client.reactions.add({
-        channel: context.channelId,
-        timestamp: context.messageTs,
-        name: "eyes",
-      });
+      await this.addReactionSafe(context.channelId, context.messageTs, "eyes");
 
       // Process with Claude
       const response = await this.agent.processMessage(context.text);
 
       // Remove typing indicator
-      await this.app.client.reactions.remove({
-        channel: context.channelId,
-        timestamp: context.messageTs,
-        name: "eyes",
-      });
+      await this.removeReactionSafe(context.channelId, context.messageTs, "eyes");
 
       // Send response in thread
       const message = await say({
@@ -191,9 +185,15 @@ export class SlackBot {
         thread_ts: context.threadTs,
       });
 
+      const msgResponse = message as { ts?: string };
+      const responseTs = msgResponse.ts ?? context.threadTs ?? context.messageTs;
+
+      if (response.triage) {
+        await this.startTriageSession(response.triage, context, responseTs);
+      }
+
       // If there are pending confirmations, set them up
       if (response.pendingConfirmations.length > 0) {
-        const msgResponse = message as { ts?: string };
         if (msgResponse.ts) {
           this.setupPendingConfirmations(
             response.pendingConfirmations,
@@ -206,15 +206,7 @@ export class SlackBot {
       console.error("Error handling message:", error);
 
       // Remove typing indicator on error
-      try {
-        await this.app.client.reactions.remove({
-          channel: context.channelId,
-          timestamp: context.messageTs,
-          name: "eyes",
-        });
-      } catch {
-        // Ignore reaction removal errors
-      }
+      await this.removeReactionSafe(context.channelId, context.messageTs, "eyes");
 
       await say({
         text: "Sorry, I encountered an error processing your request. Please try again.",
@@ -232,10 +224,11 @@ export class SlackBot {
     responseTs: string
   ): void {
     for (const op of operations) {
+      const description = this.formatConfirmationDescription(op);
       this.confirmations.create({
         type: op.toolName === "add_note" ? "add_note" : "move_stage",
-        description: `${op.toolName} for candidate ${op.candidateId}`,
-        candidateIds: [op.candidateId],
+        description,
+        candidateIds: op.candidateId ? [op.candidateId] : [],
         payload: op,
         channelId: context.channelId,
         messageTs: responseTs,
@@ -244,17 +237,8 @@ export class SlackBot {
     }
 
     // Add reaction prompt to the message
-    this.app.client.reactions.add({
-      channel: context.channelId,
-      timestamp: responseTs,
-      name: "white_check_mark",
-    }).catch(console.error);
-
-    this.app.client.reactions.add({
-      channel: context.channelId,
-      timestamp: responseTs,
-      name: "x",
-    }).catch(console.error);
+    this.addReactionSafe(context.channelId, responseTs, "white_check_mark");
+    this.addReactionSafe(context.channelId, responseTs, "x");
   }
 
   /**
@@ -269,6 +253,62 @@ export class SlackBot {
     const operation = confirmation.payload as PendingWriteOperation;
 
     if (approved) {
+      if (operation.toolName === "set_reminder") {
+        if (!this.reminders) {
+          await this.app.client.chat.postMessage({
+            channel: confirmation.channelId,
+            thread_ts: confirmation.messageTs,
+            text: "❌ Reminder service is not available. Please try again later.",
+          });
+          this.confirmations.complete(confirmation.id);
+          return;
+        }
+
+        const input = operation.input as { remind_in?: string; note?: string };
+        if (!operation.candidateId || !input.remind_in) {
+          await this.app.client.chat.postMessage({
+            channel: confirmation.channelId,
+            thread_ts: confirmation.messageTs,
+            text: "❌ Missing reminder details. Please provide a candidate and reminder time.",
+          });
+          this.confirmations.complete(confirmation.id);
+          return;
+        }
+
+        try {
+          const scheduleParams: {
+            userId: string;
+            candidateId: string;
+            remindIn: string;
+            note?: string;
+          } = {
+            userId: confirmation.userId,
+            candidateId: operation.candidateId,
+            remindIn: input.remind_in,
+          };
+          if (input.note !== undefined) {
+            scheduleParams.note = input.note;
+          }
+          const scheduled = await this.reminders.scheduleReminder(scheduleParams);
+
+          await this.app.client.chat.postMessage({
+            channel: confirmation.channelId,
+            thread_ts: confirmation.messageTs,
+            text: `✅ Done! ${scheduled.message}`,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Failed to schedule reminder.";
+          await this.app.client.chat.postMessage({
+            channel: confirmation.channelId,
+            thread_ts: confirmation.messageTs,
+            text: `❌ Failed: ${message}`,
+          });
+        }
+
+        this.confirmations.complete(confirmation.id);
+        return;
+      }
+
       const result = await this.agent.executeConfirmed(operation);
 
       await this.app.client.chat.postMessage({
@@ -333,28 +373,16 @@ export class SlackBot {
       });
 
       // Update session with new message timestamp for reactions
-      if (message.ts) {
-        this.triageSessions.updateMessageTs(session.userId, message.ts);
+        if (message.ts) {
+          this.triageSessions.updateMessageTs(session.userId, message.ts);
 
-        // Add reaction prompts to new message
-        await Promise.all([
-          this.app.client.reactions.add({
-            channel: session.channelId,
-            timestamp: message.ts,
-            name: "white_check_mark",
-          }),
-          this.app.client.reactions.add({
-            channel: session.channelId,
-            timestamp: message.ts,
-            name: "x",
-          }),
-          this.app.client.reactions.add({
-            channel: session.channelId,
-            timestamp: message.ts,
-            name: "thinking_face",
-          }),
-        ]).catch(console.error);
-      }
+          // Add reaction prompts to new message
+          await Promise.all([
+            this.addReactionSafe(session.channelId, message.ts, "white_check_mark"),
+            this.addReactionSafe(session.channelId, message.ts, "x"),
+            this.addReactionSafe(session.channelId, message.ts, "thinking_face"),
+          ]);
+        }
     } else {
       // Triage complete - show summary
       const completedSession = this.triageSessions.endSession(session.userId);
@@ -367,6 +395,114 @@ export class SlackBot {
           text: summaryText,
         });
       }
+    }
+  }
+
+  private formatConfirmationDescription(op: PendingWriteOperation): string {
+    const input = op.input as {
+      name_or_email?: string;
+      candidate_name?: string;
+      candidate_email?: string;
+      name?: string;
+      email?: string;
+      offer_id?: string;
+      interview_schedule_id?: string;
+    };
+    const candidateLabel =
+      input?.name_or_email ??
+      input?.candidate_email ??
+      input?.candidate_name ??
+      input?.email ??
+      input?.name ??
+      op.candidateId;
+    if (candidateLabel) {
+      return `${op.toolName} for ${candidateLabel}`;
+    }
+    if (input?.offer_id) {
+      return `${op.toolName} for offer ${input.offer_id}`;
+    }
+    if (input?.interview_schedule_id) {
+      return `${op.toolName} for interview schedule ${input.interview_schedule_id}`;
+    }
+    return op.toolName;
+  }
+
+  private async startTriageSession(
+    triage: TriageSessionData,
+    context: MessageContext,
+    responseTs: string
+  ): Promise<void> {
+    if (!triage.candidates || triage.candidates.length === 0) {
+      const message = triage.message || "No candidates found for triage.";
+      await this.app.client.chat.postMessage({
+        channel: context.channelId,
+        thread_ts: responseTs,
+        text: message,
+      });
+      return;
+    }
+
+    const first = triage.candidates[0];
+    if (!first) {
+      return;
+    }
+    const cardText = this.triageSessions.formatCandidateCard(
+      first,
+      1,
+      triage.candidates.length
+    );
+
+    const message = await this.app.client.chat.postMessage({
+      channel: context.channelId,
+      thread_ts: responseTs,
+      text: cardText,
+    });
+
+    if (message.ts) {
+      this.triageSessions.create({
+        userId: context.userId,
+        channelId: context.channelId,
+        messageTs: message.ts,
+        candidates: triage.candidates,
+      });
+
+      await Promise.all([
+        this.addReactionSafe(context.channelId, message.ts, "white_check_mark"),
+        this.addReactionSafe(context.channelId, message.ts, "x"),
+        this.addReactionSafe(context.channelId, message.ts, "thinking_face"),
+      ]);
+    }
+  }
+
+  private async addReactionSafe(
+    channelId: string,
+    timestamp: string,
+    name: string
+  ): Promise<void> {
+    try {
+      await this.app.client.reactions.add({
+        channel: channelId,
+        timestamp,
+        name,
+      });
+    } catch (error) {
+      console.warn("Failed to add reaction:", error);
+    }
+  }
+
+  private async removeReactionSafe(
+    channelId: string,
+    timestamp: string,
+    name: string
+  ): Promise<void> {
+    try {
+      await this.app.client.reactions.remove({
+        channel: channelId,
+        timestamp,
+        name,
+      });
+    } catch (error) {
+      console.warn("Failed to remove reaction:", error);
     }
   }
 }

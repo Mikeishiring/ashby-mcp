@@ -14,6 +14,7 @@ import type {
   InterviewPlan,
   InterviewSchedule,
   Interview,
+  InterviewEvent,
   Note,
   User,
   FeedbackSubmission,
@@ -44,6 +45,10 @@ export class AshbyClient {
     candidates: 60 * 1000, // 1 minute
   } as const;
 
+  private static readonly REQUEST_TIMEOUT_MS = 15000;
+  private static readonly MAX_RETRIES = 2;
+  private static readonly RETRY_BASE_DELAY_MS = 500;
+
   constructor(config: Config) {
     this.baseUrl = config.ashby.baseUrl;
     this.apiKey = config.ashby.apiKey;
@@ -53,14 +58,13 @@ export class AshbyClient {
   // HTTP Layer
   // ===========================================================================
 
-  private async request<T>(
+  private async postJson(
     endpoint: string,
     body?: Record<string, unknown>
-  ): Promise<T> {
+  ): Promise<Response> {
     const url = `${this.baseUrl}/${endpoint}`;
     const auth = Buffer.from(`${this.apiKey}:`).toString("base64");
-
-    console.log(`[Ashby] Requesting ${endpoint}...`);
+    const isRead = this.isReadEndpoint(endpoint);
 
     const fetchOptions: RequestInit = {
       method: "POST",
@@ -74,8 +78,69 @@ export class AshbyClient {
       fetchOptions.body = JSON.stringify(body);
     }
 
+    const maxRetries = isRead ? AshbyClient.MAX_RETRIES : 0;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+      const controller = new globalThis.AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), AshbyClient.REQUEST_TIMEOUT_MS);
+
+      try {
+        const response = await fetch(url, { ...fetchOptions, signal: controller.signal });
+        clearTimeout(timeoutId);
+
+        if (response.ok) {
+          return response;
+        }
+
+        if (this.shouldRetryStatus(response.status, isRead) && attempt < maxRetries) {
+          await this.backoff(attempt);
+          continue;
+        }
+
+        return response;
+      } catch (error) {
+        clearTimeout(timeoutId);
+        if (this.shouldRetryError(error, isRead) && attempt < maxRetries) {
+          await this.backoff(attempt);
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    throw new Error("Request failed after retries");
+  }
+
+  private isReadEndpoint(endpoint: string): boolean {
+    return [".list", ".info", ".search"].some((token) => endpoint.includes(token));
+  }
+
+  private shouldRetryStatus(status: number, isRead: boolean): boolean {
+    if (!isRead) return false;
+    return status === 429 || (status >= 500 && status < 600);
+  }
+
+  private shouldRetryError(error: unknown, isRead: boolean): boolean {
+    if (!isRead) return false;
+    if (error instanceof Error && error.name === "AbortError") {
+      return true;
+    }
+    return error instanceof TypeError;
+  }
+
+  private async backoff(attempt: number): Promise<void> {
+    const delay = AshbyClient.RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
+
+  private async request<T>(
+    endpoint: string,
+    body?: Record<string, unknown>
+  ): Promise<T> {
+    console.log(`[Ashby] Requesting ${endpoint}...`);
+
     try {
-      const response = await fetch(url, fetchOptions);
+      const response = await this.postJson(endpoint, body);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -132,24 +197,8 @@ export class AshbyClient {
     endpoint: string,
     body?: Record<string, unknown>
   ): Promise<PaginatedResponse<T>> {
-    const url = `${this.baseUrl}/${endpoint}`;
-    const auth = Buffer.from(`${this.apiKey}:`).toString("base64");
-
     console.log(`[Ashby] Requesting ${endpoint}...`);
-
-    const fetchOptions: RequestInit = {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${auth}`,
-        "Content-Type": "application/json",
-      },
-    };
-
-    if (body) {
-      fetchOptions.body = JSON.stringify(body);
-    }
-
-    const response = await fetch(url, fetchOptions);
+    const response = await this.postJson(endpoint, body);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -314,14 +363,25 @@ export class AshbyClient {
     const cached = this.getCached<InterviewStage[]>(cacheKey);
     if (cached) return cached;
 
-    // Ashby API doesn't have a global interviewStage.list endpoint.
-    // We extract unique stages from active applications which include currentInterviewStage.
-    const applications = await this.getAllPaginated<Application>("application.list", { status: "Active" });
-
     const stageMap = new Map<string, InterviewStage>();
-    for (const app of applications) {
-      if (app.currentInterviewStage && !stageMap.has(app.currentInterviewStage.id)) {
-        stageMap.set(app.currentInterviewStage.id, app.currentInterviewStage);
+
+    // Prefer interview plans to build a complete stage list without relying on active applications.
+    const plans = await this.listInterviewPlans();
+    for (const plan of plans) {
+      for (const stage of plan.interviewStages) {
+        if (stage?.id) {
+          stageMap.set(stage.id, stage);
+        }
+      }
+    }
+
+    if (stageMap.size === 0) {
+      // Fallback: extract unique stages from active applications.
+      const applications = await this.getAllPaginated<Application>("application.list", { status: "Active" });
+      for (const app of applications) {
+        if (app.currentInterviewStage && !stageMap.has(app.currentInterviewStage.id)) {
+          stageMap.set(app.currentInterviewStage.id, app.currentInterviewStage);
+        }
       }
     }
 
@@ -698,8 +758,8 @@ export class AshbyClient {
   // Feedback & Custom Fields
   // ===========================================================================
 
-  async getFeedbackSubmission(feedbackSubmissionId: string): Promise<any> {
-    return this.request<any>("feedbackSubmission.info", { feedbackSubmissionId });
+  async getFeedbackSubmission(feedbackSubmissionId: string): Promise<FeedbackSubmission> {
+    return this.request<FeedbackSubmission>("feedbackSubmission.info", { feedbackSubmissionId });
   }
 
   async listCustomFields(): Promise<Array<{ id: string; title: string; fieldType: string }>> {
@@ -733,16 +793,20 @@ export class AshbyClient {
   // Application History
   // ===========================================================================
 
-  async getApplicationHistory(applicationId: string): Promise<Array<any>> {
-    const response = await this.request<{ applicationHistory: Array<any> }>(
+  async getApplicationHistory(
+    applicationId: string
+  ): Promise<Array<Record<string, unknown>>> {
+    const response = await this.request<{ applicationHistory: Array<Record<string, unknown>> }>(
       "application.listHistory",
       { applicationId }
     );
     return response.applicationHistory;
   }
 
-  async listInterviewEvents(interviewScheduleId?: string): Promise<Array<any>> {
-    return this.getAllPaginated<any>("interviewEvent.list", { interviewScheduleId });
+  async listInterviewEvents(
+    interviewScheduleId?: string
+  ): Promise<InterviewEvent[]> {
+    return this.getAllPaginated<InterviewEvent>("interviewEvent.list", { interviewScheduleId });
   }
 }
 

@@ -511,7 +511,7 @@ Ashby ATS
 ASHBY_API_KEY=...           # From Ashby admin
 ANTHROPIC_API_KEY=...       # From console.anthropic.com
 SLACK_BOT_TOKEN=xoxb-...    # From api.slack.com
-SLACK_CHANNEL_ID=C...       # From Slack channel details
+SLACK_APP_TOKEN=xapp-...    # App-level token (Socket Mode)
 ```
 
 ### Support Channels
