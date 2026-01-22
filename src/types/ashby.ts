@@ -57,12 +57,14 @@ export interface Application {
   candidate?: Candidate;
 }
 
+/**
+ * Application status values from the Ashby API (application.list endpoint)
+ */
 export type ApplicationStatus =
   | "Active"
   | "Hired"
   | "Archived"
-  | "Lead"
-  | "Converted";
+  | "Lead";
 
 export interface ArchiveReason {
   id: string;
@@ -176,7 +178,8 @@ export type InterviewStageType =
   | "Interview"
   | "Offer"
   | "PreOffer"
-  | "PostOffer";
+  | "PostOffer"
+  | "Archived";
 
 export interface Interview {
   id: string;
@@ -507,42 +510,47 @@ export interface TriageSession {
 // =============================================================================
 
 /**
- * Job offer details
+ * Job offer details from Ashby API.
+ * Note: Offer data is form-based, so actual compensation fields vary
+ * based on the offer form definition.
  */
 export interface Offer {
   id: string;
   applicationId: string;
   status: OfferStatus;
+  acceptanceStatus?: OfferAcceptanceStatus;
   offerProcessId: string;
-  startDate: string;
-  salary: number;
-  salaryFrequency: "Annual" | "Hourly";
-  currency: string;
-  equity?: number;
-  equityType?: string;
-  signingBonus?: number;
-  relocationBonus?: number;
-  variableCompensation?: number;
-  customFields?: CustomField[];
+  /** Form values keyed by field path - structure depends on offer form definition */
+  offerForm?: Record<string, unknown>;
+  /** Form definition for this offer */
+  offerFormDefinition?: Record<string, unknown>;
   approvals?: OfferApproval[];
-  sentAt?: string;
-  sentByUserId?: string;
-  respondedAt?: string;
-  respondedBy?: string;
-  notes?: string;
   createdAt: string;
   updatedAt: string;
 }
 
+/**
+ * Offer status values from the Ashby API (offer.list endpoint)
+ */
 export type OfferStatus =
-  | "Draft"
-  | "Pending"
-  | "Approved"
-  | "Sent"
+  | "WaitingOnApprovalStart"
+  | "WaitingOnOfferApproval"
+  | "WaitingOnApprovalDefinition"
+  | "WaitingOnCandidateResponse"
+  | "CandidateRejected"
+  | "CandidateAccepted"
+  | "OfferCancelled";
+
+/**
+ * Offer acceptance status values from the Ashby API (offer.list endpoint)
+ */
+export type OfferAcceptanceStatus =
   | "Accepted"
   | "Declined"
-  | "Expired"
-  | "Withdrawn";
+  | "Pending"
+  | "Created"
+  | "Cancelled"
+  | "WaitingOnResponse";
 
 export interface OfferApproval {
   id: string;
@@ -607,24 +615,37 @@ export interface InterviewEventDetails extends InterviewEvent {
 // Candidate Creation Parameters
 // =============================================================================
 
+/**
+ * Parameters for creating a new candidate via candidate.create API.
+ * Note: For custom fields, use the customFields.setValue endpoint after creation.
+ */
 export interface CreateCandidateParams {
+  /** The first and last name of the candidate (required) */
   name: string;
-  email: string;
-  phoneNumber?: string | undefined;
-  resumeFileHandle?: string | undefined;
-  socialLinks?: Array<{
-    url: string;
-    type: string;
-  }> | undefined;
-  tags?: string[] | undefined;
-  source?: {
-    sourceId: string;
-    creditedToUserId?: string | undefined;
-  } | undefined;
-  customFields?: Array<{
-    customFieldId: string;
-    value: unknown;
-  }> | undefined;
+  /** Primary, personal email of the candidate */
+  email?: string;
+  /** Primary, personal phone number */
+  phoneNumber?: string;
+  /** URL to the candidate's LinkedIn profile (must be valid URL) */
+  linkedInUrl?: string;
+  /** URL to the candidate's Github profile (must be valid URL) */
+  githubUrl?: string;
+  /** URL of the candidate's website (must be valid URL) */
+  website?: string;
+  /** Array of alternate email addresses */
+  alternateEmailAddresses?: string[];
+  /** The source ID to set on the candidate */
+  sourceId?: string;
+  /** The user ID the candidate will be credited to */
+  creditedToUserId?: string;
+  /** The location of the candidate */
+  location?: {
+    city?: string;
+    region?: string;
+    country?: string;
+  };
+  /** ISO date string to set the candidate's createdAt timestamp */
+  createdAt?: string;
 }
 
 // =============================================================================
@@ -671,8 +692,8 @@ export interface CandidateStatusAnalysis {
   recentActivity: RecentActivity[];
   nextSteps: string[];
   priority: CandidatePriority;
-  upcomingInterviews: Interview[];
-  completedInterviewsWithoutFeedback: Interview[];
+  upcomingInterviews: InterviewEvent[];
+  completedInterviewsWithoutFeedback: InterviewEvent[];
   pendingOffer?: Offer;
 }
 
@@ -697,3 +718,28 @@ export interface BatchBlockerAnalysis {
     priority: CandidatePriority;
   }>;
 }
+
+// =============================================================================
+// AI Criteria Evaluations
+// =============================================================================
+
+/**
+ * AI-generated criteria evaluation for an application.
+ * Requires the AI Application Review feature to be enabled.
+ */
+export interface CriteriaEvaluation {
+  id: string;
+  applicationId: string;
+  criteriaId: string;
+  criteriaTitle: string;
+  outcome: CriteriaEvaluationOutcome;
+  reasoning: string;
+  confidence?: number;
+  evaluatedAt: string;
+}
+
+export type CriteriaEvaluationOutcome =
+  | "Met"
+  | "NotMet"
+  | "PartiallyMet"
+  | "Unknown";

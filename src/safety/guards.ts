@@ -74,7 +74,7 @@ export class SafetyGuards {
     if (isHired) {
       return {
         allowed: false,
-        reason: "This candidate has been hired and their information is restricted for privacy reasons.",
+        reason: "hired_candidate",
       };
     }
 

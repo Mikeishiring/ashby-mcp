@@ -6,7 +6,7 @@
 
 import type { AshbyService } from "../ashby/service.js";
 import type { SafetyGuards } from "../safety/guards.js";
-import type { ToolResult, Application } from "../types/index.js";
+import type { ToolResult, Application, CreateCandidateParams, OfferStatus } from "../types/index.js";
 import { isWriteTool } from "./tools.js";
 
 interface ToolInput {
@@ -29,30 +29,29 @@ interface ToolInput {
   remind_in?: string;
   note?: string;
   stage?: string;
-  // Phase 1: Offers
+  // Phase 1: Offers (form-based API)
   status?: string;
   offer_id?: string;
   offer_process_id?: string;
-  start_date?: string;
-  salary?: number;
-  salary_frequency?: string;
-  currency?: string;
-  equity?: number;
-  signing_bonus?: number;
-  relocation_bonus?: number;
-  notes?: string;
-  approver_id?: string;
+  offer_form_id?: string;
+  offer_form?: Record<string, unknown>;
+  offer_version_id?: string;
+  approval_step_id?: string;
   // Phase 1: Interviews
   interview_schedule_id?: string;
   interview_id?: string;
   user_id?: string;
   end_date?: string;
   cancellation_reason?: string;
+  include_archived?: boolean;
+  include_non_shared?: boolean;
   // Phase 1: Candidate creation
   name?: string;
   email?: string;
   phone_number?: string;
   linkedin_url?: string;
+  github_url?: string;
+  website?: string;
   source_id?: string;
   tags?: string[];
   // Phase 3B: Tagging
@@ -228,27 +227,50 @@ export class ToolExecutor {
 
       // =========================================================================
       // Phase 1: Offer Write Operations
+      // Offer flow: start_offer_process -> start_offer -> create_offer
       // =========================================================================
 
-      if (toolName === "create_offer") {
-        if (!input.offer_process_id || !input.start_date || !input.salary) {
+      if (toolName === "start_offer_process") {
+        const result = await this.ashby.startOfferProcess(candidateId);
+        return {
+          success: true,
+          data: {
+            ...result,
+            message: `Offer process started. Use start_offer with offerProcessId: ${result.offerProcessId} to get the form definition.`,
+          },
+        };
+      }
+
+      if (toolName === "start_offer") {
+        if (!input.offer_process_id) {
           return {
             success: false,
-            error: "Missing required fields: offer_process_id, start_date, salary",
+            error: "Missing required field: offer_process_id (from start_offer_process)",
+          };
+        }
+
+        const result = await this.ashby.startOffer(input.offer_process_id);
+        return {
+          success: true,
+          data: {
+            ...result,
+            message: `Offer form ready. Use create_offer with offerFormId and the filled form values.`,
+          },
+        };
+      }
+
+      if (toolName === "create_offer") {
+        if (!input.offer_process_id || !input.offer_form_id || !input.offer_form) {
+          return {
+            success: false,
+            error: "Missing required fields: offer_process_id, offer_form_id, offer_form",
           };
         }
 
         const offer = await this.ashby.createOffer({
-          candidateId,
           offerProcessId: input.offer_process_id,
-          startDate: input.start_date,
-          salary: input.salary,
-          ...(input.salary_frequency && { salaryFrequency: input.salary_frequency as "Annual" | "Hourly" }),
-          ...(input.currency && { currency: input.currency }),
-          ...(input.equity !== undefined && { equity: input.equity }),
-          ...(input.signing_bonus !== undefined && { signingBonus: input.signing_bonus }),
-          ...(input.relocation_bonus !== undefined && { relocationBonus: input.relocation_bonus }),
-          ...(input.notes && { notes: input.notes }),
+          offerFormId: input.offer_form_id,
+          offerForm: input.offer_form as Record<string, unknown>,
         });
 
         return {
@@ -261,60 +283,43 @@ export class ToolExecutor {
       }
 
       if (toolName === "update_offer") {
-        if (!input.offer_id) {
-          return { success: false, error: "Missing required field: offer_id" };
+        if (!input.offer_id || !input.offer_form) {
+          return { success: false, error: "Missing required fields: offer_id, offer_form" };
         }
 
-        const updates: any = {};
-        if (input.salary !== undefined) updates.salary = input.salary;
-        if (input.start_date) updates.startDate = input.start_date;
-        if (input.equity !== undefined) updates.equity = input.equity;
-        if (input.signing_bonus !== undefined) updates.signingBonus = input.signing_bonus;
-        if (input.relocation_bonus !== undefined) updates.relocationBonus = input.relocation_bonus;
-        if (input.notes) updates.notes = input.notes;
-
-        const offer = await this.ashby.updateOffer(input.offer_id, updates);
+        const offer = await this.ashby.updateOffer(
+          input.offer_id,
+          input.offer_form as Record<string, unknown>
+        );
 
         return {
           success: true,
           data: {
             offer,
-            message: `Offer updated successfully.`,
+            message: `Offer updated successfully. A new version was created.`,
           },
         };
       }
 
       if (toolName === "approve_offer") {
-        if (!input.offer_id || !input.approver_id) {
+        if (!input.offer_version_id) {
           return {
             success: false,
-            error: "Missing required fields: offer_id, approver_id",
+            error: "Missing required field: offer_version_id",
           };
         }
 
-        const offer = await this.ashby.approveOffer(input.offer_id, input.approver_id);
+        const offer = await this.ashby.approveOffer(
+          input.offer_version_id,
+          input.approval_step_id,
+          input.user_id
+        );
 
         return {
           success: true,
           data: {
             offer,
             message: `Offer approved. Status: ${offer.status}`,
-          },
-        };
-      }
-
-      if (toolName === "send_offer") {
-        if (!input.offer_id) {
-          return { success: false, error: "Missing required field: offer_id" };
-        }
-
-        const offer = await this.ashby.sendOffer(input.offer_id);
-
-        return {
-          success: true,
-          data: {
-            offer,
-            message: `Offer sent to candidate. Status: ${offer.status}`,
           },
         };
       }
@@ -373,35 +378,42 @@ export class ToolExecutor {
       // =========================================================================
 
       if (toolName === "create_candidate") {
-        if (!input.name || !input.email) {
+        if (!input.name) {
           return {
             success: false,
-            error: "Missing required fields: name, email",
+            error: "Missing required field: name",
           };
         }
 
-        const params: any = {
+        const params: CreateCandidateParams = {
           name: input.name,
-          email: input.email,
         };
 
+        if (input.email) params.email = input.email;
         if (input.phone_number) params.phoneNumber = input.phone_number;
-        if (input.linkedin_url) {
-          params.socialLinks = [{
-            url: input.linkedin_url,
-            type: "LinkedIn",
-          }];
-        }
-        if (input.tags) params.tags = input.tags;
-        if (input.source_id) params.source = { sourceId: input.source_id };
+        if (input.linkedin_url) params.linkedInUrl = input.linkedin_url;
+        if (input.github_url) params.githubUrl = input.github_url;
+        if (input.website) params.website = input.website;
+        if (input.source_id) params.sourceId = input.source_id;
 
         const candidate = await this.ashby.createCandidate(params);
+
+        // Add tags after creation if provided (tags need to be added via separate API)
+        if (input.tags && input.tags.length > 0) {
+          for (const tagId of input.tags) {
+            try {
+              await this.ashby["client"].addCandidateTag(candidate.id, tagId);
+            } catch {
+              // Continue even if tag addition fails
+            }
+          }
+        }
 
         return {
           success: true,
           data: {
             candidate,
-            message: `Candidate created successfully: ${candidate.name} (${candidate.primaryEmailAddress?.value})`,
+            message: `Candidate created successfully: ${candidate.name}${candidate.primaryEmailAddress?.value ? ` (${candidate.primaryEmailAddress.value})` : ""}`,
           },
         };
       }
@@ -585,6 +597,15 @@ export class ToolExecutor {
 
         const check = await this.safety.checkReadOperation(candidateId);
         if (!check.allowed) {
+          if (check.reason === "hired_candidate") {
+            return {
+              success: true,
+              data: {
+                status: "hired",
+                message: "This candidate was hired! 🎉 Their detailed application data is archived.",
+              },
+            };
+          }
           return { success: false, error: check.reason ?? "Access denied" };
         }
 
@@ -645,6 +666,21 @@ export class ToolExecutor {
             error: "Could not identify candidate. Please provide a name, email, or candidate ID.",
           };
         }
+
+        const check = await this.safety.checkReadOperation(candidateId);
+        if (!check.allowed) {
+          if (check.reason === "hired_candidate") {
+            return {
+              success: true,
+              data: {
+                status: "hired",
+                message: "This candidate was hired! 🎉 Scorecard data is archived.",
+              },
+            };
+          }
+          return { success: false, error: check.reason ?? "Access denied" };
+        }
+
         const scorecard = await this.ashby.getCandidateScorecard(candidateId);
         return { success: true, data: scorecard };
       }
@@ -865,7 +901,7 @@ export class ToolExecutor {
       // =========================================================================
 
       case "list_offers": {
-        const filters: { applicationId?: string; status?: any } = {};
+        const filters: { applicationId?: string; status?: OfferStatus } = {};
 
         if (input.candidate_id) {
           const candidateId = await this.resolveCandidateId(input);
@@ -876,7 +912,7 @@ export class ToolExecutor {
           }
         }
 
-        if (input.status) filters.status = input.status as any;
+        if (input.status) filters.status = input.status as OfferStatus;
 
         const offers = await this.ashby.listOffers(filters);
         return { success: true, data: offers };
@@ -904,27 +940,17 @@ export class ToolExecutor {
       // =========================================================================
 
       case "list_all_interviews": {
-        const filters: {
-          applicationId?: string;
-          userId?: string;
-          startDate?: string;
-          endDate?: string;
+        // interview.list returns templates, not scheduled events
+        // Filters: includeArchived, includeNonSharedInterviews
+        const options: {
+          includeArchived?: boolean;
+          includeNonSharedInterviews?: boolean;
         } = {};
 
-        if (input.candidate_id) {
-          const candidateId = await this.resolveCandidateId(input);
-          if (candidateId) {
-            const { applications } = await this.ashby["client"].getCandidateWithApplications(candidateId);
-            const activeApp = applications.find(a => a.status === "Active");
-            if (activeApp) filters.applicationId = activeApp.id;
-          }
-        }
+        if (input.include_archived) options.includeArchived = true;
+        if (input.include_non_shared) options.includeNonSharedInterviews = true;
 
-        if (input.user_id) filters.userId = input.user_id;
-        if (input.start_date) filters.startDate = input.start_date;
-        if (input.end_date) filters.endDate = input.end_date;
-
-        const interviews = await this.ashby.listAllInterviews(filters);
+        const interviews = await this.ashby.listAllInterviews(options);
         return { success: true, data: interviews };
       }
 

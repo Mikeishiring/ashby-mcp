@@ -26,6 +26,7 @@ import type {
   OfferStatus,
   Interview,
   InterviewSchedule,
+  InterviewEvent,
   CreateCandidateParams,
   CandidateStatusAnalysis,
   BatchBlockerAnalysis,
@@ -666,9 +667,21 @@ export class AshbyService {
     return this.client.listArchiveReasons();
   }
 
+  /**
+   * Reject/archive a candidate's application.
+   *
+   * @param candidateId - The candidate to reject
+   * @param archiveReasonId - The reason for archiving (from getArchiveReasons())
+   * @param archiveEmail - Optional email to send to the candidate
+   */
   async rejectCandidate(
     candidateId: string,
-    archiveReasonId: string
+    archiveReasonId: string,
+    archiveEmail?: {
+      subject: string;
+      body: string;
+      sendAt?: string;
+    }
   ): Promise<Application> {
     const { applications } = await this.client.getCandidateWithApplications(
       candidateId
@@ -679,7 +692,25 @@ export class AshbyService {
       throw new Error("No active application found for this candidate");
     }
 
-    return this.client.archiveApplication(activeApp.id, archiveReasonId);
+    // Find an archived stage for this job's interview plan
+    const job = await this.client.getJob(activeApp.jobId);
+    if (!job.interviewPlan) {
+      throw new Error("Job has no interview plan configured");
+    }
+
+    const stages = await this.client.listInterviewStagesForPlan(job.interviewPlan.id);
+    const archivedStage = stages.find((s) => s.interviewStageType === "Archived");
+
+    if (!archivedStage) {
+      throw new Error("No archived stage found in the interview plan");
+    }
+
+    return this.client.archiveApplication(
+      activeApp.id,
+      archivedStage.id,
+      archiveReasonId,
+      archiveEmail
+    );
   }
 
   // ===========================================================================
@@ -813,28 +844,41 @@ export class AshbyService {
   // Interviews (Phase 1 - Features 8-10)
   // ===========================================================================
 
-  async listAllInterviews(filters?: {
-    applicationId?: string;
-    userId?: string;
-    startDate?: string;
-    endDate?: string;
+  /**
+   * List all interview templates.
+   *
+   * NOTE: This returns interview TEMPLATES, not scheduled interview events.
+   * For scheduled interviews, use listInterviewSchedules() or getUpcomingInterviewSchedules().
+   */
+  async listAllInterviews(options?: {
+    includeArchived?: boolean;
+    includeNonSharedInterviews?: boolean;
   }): Promise<Interview[]> {
-    return this.client.listInterviews(filters);
+    return this.client.listInterviews(options);
   }
 
-  async getUpcomingInterviews(limit: number = 10): Promise<Interview[]> {
-    const now = new Date().toISOString();
-    const allInterviews = await this.client.listInterviews({
-      startDate: now,
-    });
+  /**
+   * Get upcoming interview schedules.
+   *
+   * NOTE: Uses interviewSchedule.list which returns actual scheduled events,
+   * not interview templates.
+   */
+  async getUpcomingInterviews(limit: number = 10): Promise<InterviewSchedule[]> {
+    const schedules = await this.client.listInterviewSchedules();
 
-    return allInterviews
-      .filter((i) => i.scheduledStartTime && new Date(i.scheduledStartTime) > new Date())
+    // Filter to schedules with future events and sort by earliest event
+    const now = new Date();
+    const upcomingSchedules = schedules
+      .filter((s) => s.interviewEvents?.some((e) => new Date(e.startTime) > now))
       .sort((a, b) => {
-        if (!a.scheduledStartTime || !b.scheduledStartTime) return 0;
-        return new Date(a.scheduledStartTime).getTime() - new Date(b.scheduledStartTime).getTime();
+        const aEarliest = a.interviewEvents?.find((e) => new Date(e.startTime) > now)?.startTime;
+        const bEarliest = b.interviewEvents?.find((e) => new Date(e.startTime) > now)?.startTime;
+        if (!aEarliest || !bEarliest) return 0;
+        return new Date(aEarliest).getTime() - new Date(bEarliest).getTime();
       })
       .slice(0, limit);
+
+    return upcomingSchedules;
   }
 
   async rescheduleInterview(
@@ -895,8 +939,9 @@ export class AshbyService {
 
   async getPendingOffers(): Promise<Offer[]> {
     const allOffers = await this.client.listOffers();
+    // Filter to offers that are still in progress (not yet responded to by candidate)
     return allOffers.filter((o) =>
-      ["Draft", "Pending", "Approved"].includes(o.status)
+      ["WaitingOnApprovalStart", "WaitingOnOfferApproval", "WaitingOnApprovalDefinition", "WaitingOnCandidateResponse"].includes(o.status)
     );
   }
 
@@ -912,57 +957,86 @@ export class AshbyService {
     return offers[0] ?? null;
   }
 
-  async createOffer(params: {
-    candidateId: string;
+  /**
+   * Start an offer process for a candidate.
+   * This is step 1 of the offer creation flow.
+   */
+  async startOfferProcess(candidateId: string): Promise<{
     offerProcessId: string;
-    startDate: string;
-    salary: number;
-    salaryFrequency?: "Annual" | "Hourly";
-    currency?: string;
-    equity?: number;
-    equityType?: string;
-    signingBonus?: number;
-    relocationBonus?: number;
-    variableCompensation?: number;
-    notes?: string;
-  }): Promise<Offer> {
-    const { applications } = await this.client.getCandidateWithApplications(
-      params.candidateId
-    );
+    applicationId: string;
+  }> {
+    const { applications } = await this.client.getCandidateWithApplications(candidateId);
     const activeApp = applications.find((a) => a.status === "Active");
 
     if (!activeApp) {
       throw new Error("No active application found for this candidate");
     }
 
-    const { candidateId, ...offerParams } = params;
-    return this.client.createOffer({
-      ...offerParams,
+    const result = await this.client.startOfferProcess(activeApp.id);
+    return {
+      offerProcessId: result.id,
       applicationId: activeApp.id,
-    });
+    };
   }
 
+  /**
+   * Start an offer version within an offer process.
+   * This is step 2 of the offer creation flow.
+   * Returns the form definition that needs to be filled out.
+   */
+  async startOffer(offerProcessId: string): Promise<{
+    offerFormId: string;
+    offerFormDefinition: Record<string, unknown>;
+  }> {
+    const result = await this.client.startOffer(offerProcessId);
+    return {
+      offerFormId: result.offerFormId,
+      offerFormDefinition: result.offerFormDefinition,
+    };
+  }
+
+  /**
+   * Create an offer by submitting a filled form.
+   * This is step 3 of the offer creation flow.
+   *
+   * Full flow: startOfferProcess -> startOffer -> createOffer
+   *
+   * @param offerProcessId - From startOfferProcess
+   * @param offerFormId - From startOffer
+   * @param offerForm - Form values keyed by field path
+   */
+  async createOffer(params: {
+    offerProcessId: string;
+    offerFormId: string;
+    offerForm: Record<string, unknown>;
+  }): Promise<Offer> {
+    return this.client.createOffer(params);
+  }
+
+  /**
+   * Update an existing offer with new form values.
+   * Creates a new version and retrigggers approval steps.
+   */
   async updateOffer(
     offerId: string,
-    updates: {
-      salary?: number;
-      startDate?: string;
-      equity?: number;
-      signingBonus?: number;
-      relocationBonus?: number;
-      variableCompensation?: number;
-      notes?: string;
-    }
+    offerForm: Record<string, unknown>
   ): Promise<Offer> {
-    return this.client.updateOffer(offerId, updates);
+    return this.client.updateOffer(offerId, offerForm);
   }
 
-  async approveOffer(offerId: string, approverId: string): Promise<Offer> {
-    return this.client.approveOffer(offerId, approverId);
-  }
-
-  async sendOffer(offerId: string): Promise<Offer> {
-    return this.client.startOffer(offerId);
+  /**
+   * Approve an offer or a specific approval step.
+   *
+   * @param offerVersionId - The offer version ID
+   * @param approvalStepId - Optional: specific step to approve
+   * @param userId - Required if approvalStepId is provided
+   */
+  async approveOffer(
+    offerVersionId: string,
+    approvalStepId?: string,
+    userId?: string
+  ): Promise<Offer> {
+    return this.client.approveOffer(offerVersionId, approvalStepId, userId);
   }
 
   // ===========================================================================
@@ -1048,16 +1122,19 @@ export class AshbyService {
     // Calculate days in stage (use updatedAt as approximation)
     const daysInStage = Math.floor((Date.now() - new Date(application.updatedAt).getTime()) / (1000 * 60 * 60 * 24));
 
-    // Get all interviews for this application
-    const allInterviews = await this.client.listInterviews({ applicationId: application.id });
+    // Get interview schedules for this application (use interviewSchedule.list, not interview.list)
+    const schedules = await this.client.listInterviewSchedules(application.id);
 
-    // Separate upcoming vs completed interviews
+    // Extract all interview events from schedules
+    const allEvents = schedules.flatMap(s => s.interviewEvents ?? []);
+
+    // Separate upcoming vs completed events
     const now = new Date();
-    const upcomingInterviews = allInterviews.filter(i =>
-      i.scheduledStartTime && new Date(i.scheduledStartTime) > now
+    const upcomingInterviews = allEvents.filter(e =>
+      e.startTime && new Date(e.startTime) > now
     );
-    const completedInterviews = allInterviews.filter(i =>
-      i.scheduledStartTime && new Date(i.scheduledStartTime) < now
+    const completedInterviews = allEvents.filter(e =>
+      e.startTime && new Date(e.startTime) < now
     );
 
     // Get feedback submissions for this application
@@ -1065,18 +1142,21 @@ export class AshbyService {
       applicationId: application.id,
     });
 
-    // Find interviews that don't have feedback yet
+    // Find completed events that don't have feedback yet
+    // Note: Feedback is linked to interviews, not events, so we check if the schedule has feedback
     const completedInterviewsWithoutFeedback = completedInterviews.filter(
-      (interview) =>
-        !feedbackSubmissions.some((feedback) => feedback.interviewId === interview.id)
+      (event) =>
+        !feedbackSubmissions.some((feedback) => feedback.interviewEventId === event.id)
     );
 
-    // Get pending offer
+    // Get pending offer (one that hasn't been responded to by candidate yet)
     let pendingOffer: Offer | undefined;
     try {
       const offers = await this.client.listOffers({ applicationId: application.id });
-      pendingOffer = offers.find(o => ["Draft", "Pending", "Approved"].includes(o.status));
-    } catch (error) {
+      pendingOffer = offers.find(o =>
+        ["WaitingOnApprovalStart", "WaitingOnOfferApproval", "WaitingOnApprovalDefinition", "WaitingOnCandidateResponse"].includes(o.status)
+      );
+    } catch {
       // Offers might not be available
     }
 
@@ -1093,7 +1173,7 @@ export class AshbyService {
 
     // Generate recent activity
     const recentActivity = this.generateRecentActivity({
-      allInterviews,
+      allEvents,
       feedbackSubmissions,
       ...(pendingOffer && { pendingOffer }),
     });
@@ -1243,8 +1323,8 @@ export class AshbyService {
   private detectBlockers(context: {
     currentStage: InterviewStage;
     daysInStage: number;
-    upcomingInterviews: Interview[];
-    completedInterviewsWithoutFeedback: Interview[];
+    upcomingInterviews: InterviewEvent[];
+    completedInterviewsWithoutFeedback: InterviewEvent[];
     feedbackSubmissions: FeedbackSubmission[];
     pendingOffer?: Offer;
     application: Application;
@@ -1269,11 +1349,11 @@ export class AshbyService {
 
     // Blocker 2: Completed interviews without feedback
     if (completedInterviewsWithoutFeedback.length > 0) {
-      const sortedInterviews = [...completedInterviewsWithoutFeedback]
-        .sort((a, b) => new Date(a.scheduledStartTime!).getTime() - new Date(b.scheduledStartTime!).getTime());
-      const oldestInterview = sortedInterviews[0];
-      if (oldestInterview && oldestInterview.scheduledStartTime) {
-        const daysSinceInterview = Math.floor((Date.now() - new Date(oldestInterview.scheduledStartTime).getTime()) / (1000 * 60 * 60 * 24));
+      const sortedEvents = [...completedInterviewsWithoutFeedback]
+        .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+      const oldestEvent = sortedEvents[0];
+      if (oldestEvent && oldestEvent.startTime) {
+        const daysSinceInterview = Math.floor((Date.now() - new Date(oldestEvent.startTime).getTime()) / (1000 * 60 * 60 * 24));
 
         blockers.push({
           type: "interview_completed_no_feedback",
@@ -1297,15 +1377,17 @@ export class AshbyService {
       });
     }
 
-    // Blocker 4: Offer created but not sent
-    if (pendingOffer && pendingOffer.status === "Approved" && !pendingOffer.sentAt) {
-      const daysSinceApproval = Math.floor((Date.now() - new Date(pendingOffer.updatedAt).getTime()) / (1000 * 60 * 60 * 24));
+    // Blocker 4: Offer approved but not yet sent to candidate
+    // In the new API: WaitingOnOfferApproval means waiting for internal approvals
+    // Once approved, it should move to WaitingOnCandidateResponse when sent
+    if (pendingOffer && pendingOffer.status === "WaitingOnApprovalStart") {
+      const daysSinceCreated = Math.floor((Date.now() - new Date(pendingOffer.createdAt).getTime()) / (1000 * 60 * 60 * 24));
       blockers.push({
         type: "offer_not_sent",
-        severity: daysSinceApproval > 2 ? "critical" : "warning",
-        message: `Offer approved ${daysSinceApproval} days ago but not sent to candidate`,
-        suggestedAction: "Send approved offer to candidate immediately",
-        daysStuck: daysSinceApproval,
+        severity: daysSinceCreated > 2 ? "critical" : "warning",
+        message: `Offer created ${daysSinceCreated} days ago but approval process not started`,
+        suggestedAction: "Start the approval process for the offer",
+        daysStuck: daysSinceCreated,
       });
     }
 
@@ -1331,27 +1413,27 @@ export class AshbyService {
   }
 
   private generateRecentActivity(context: {
-    allInterviews: Interview[];
+    allEvents: InterviewEvent[];
     feedbackSubmissions: FeedbackSubmission[];
     pendingOffer?: Offer;
   }): RecentActivity[] {
     const activities: RecentActivity[] = [];
-    const { allInterviews, pendingOffer } = context;
+    const { allEvents, pendingOffer } = context;
 
-    // Add recent interviews
-    const recentInterviews = allInterviews
-      .filter(i => i.scheduledStartTime)
-      .sort((a, b) => new Date(b.scheduledStartTime!).getTime() - new Date(a.scheduledStartTime!).getTime())
+    // Add recent interview events
+    const recentEvents = allEvents
+      .filter(e => e.startTime)
+      .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime())
       .slice(0, 3);
 
-    for (const interview of recentInterviews) {
-      const isPast = new Date(interview.scheduledStartTime!) < new Date();
+    for (const event of recentEvents) {
+      const isPast = new Date(event.startTime) < new Date();
       activities.push({
         type: "interview",
-        timestamp: interview.scheduledStartTime!,
+        timestamp: event.startTime,
         summary: isPast
-          ? `Completed interview`
-          : `Upcoming interview`,
+          ? `Completed interview${event.title ? `: ${event.title}` : ""}`
+          : `Upcoming interview${event.title ? `: ${event.title}` : ""}`,
       });
     }
 
@@ -1359,19 +1441,18 @@ export class AshbyService {
 
     // Add offer activity
     if (pendingOffer) {
-      if (pendingOffer.sentAt) {
-        activities.push({
-          type: "offer",
-          timestamp: pendingOffer.sentAt,
-          summary: `Offer sent (status: ${pendingOffer.status})`,
-        });
-      } else {
-        activities.push({
-          type: "offer",
-          timestamp: pendingOffer.createdAt,
-          summary: `Offer created (status: ${pendingOffer.status})`,
-        });
-      }
+      // Use status to determine if offer has been sent
+      const isSent = pendingOffer.status === "WaitingOnCandidateResponse" ||
+        pendingOffer.status === "CandidateAccepted" ||
+        pendingOffer.status === "CandidateRejected";
+
+      activities.push({
+        type: "offer",
+        timestamp: pendingOffer.updatedAt,
+        summary: isSent
+          ? `Offer sent (status: ${pendingOffer.status})`
+          : `Offer in progress (status: ${pendingOffer.status})`,
+      });
     }
 
     // Sort by timestamp (most recent first)

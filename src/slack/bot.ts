@@ -161,6 +161,51 @@ export class SlackBot {
   }
 
   /**
+   * Fetch thread history for conversation context
+   */
+  private async fetchThreadHistory(
+    channelId: string,
+    threadTs: string,
+    currentTs: string
+  ): Promise<Array<{ role: "user" | "assistant"; content: string }>> {
+    try {
+      const result = await this.app.client.conversations.replies({
+        channel: channelId,
+        ts: threadTs,
+        limit: 20, // Last 20 messages should be enough context
+      });
+
+      if (!result.messages) return [];
+
+      const history: Array<{ role: "user" | "assistant"; content: string }> = [];
+      const botUserId = (await this.app.client.auth.test()).user_id;
+
+      for (const msg of result.messages) {
+        // Skip the current message (we'll add it separately)
+        if (msg.ts === currentTs) continue;
+        // Skip messages without text
+        if (!msg.text) continue;
+
+        const isBot = msg.bot_id || msg.user === botUserId;
+        const cleanText = isBot ? msg.text : this.cleanMentionText(msg.text);
+
+        // Skip empty messages
+        if (!cleanText.trim()) continue;
+
+        history.push({
+          role: isBot ? "assistant" : "user",
+          content: cleanText,
+        });
+      }
+
+      return history;
+    } catch (error) {
+      console.error("Error fetching thread history:", error);
+      return [];
+    }
+  }
+
+  /**
    * Handle an incoming message
    */
   private async handleMessage(
@@ -175,8 +220,13 @@ export class SlackBot {
         name: "eyes",
       });
 
-      // Process with Claude
-      const response = await this.agent.processMessage(context.text);
+      // Fetch thread history for context (if in a thread)
+      const history = context.threadTs && context.threadTs !== context.messageTs
+        ? await this.fetchThreadHistory(context.channelId, context.threadTs, context.messageTs)
+        : [];
+
+      // Process with Claude (with conversation history)
+      const response = await this.agent.processMessage(context.text, history);
 
       // Remove typing indicator
       await this.app.client.reactions.remove({
@@ -185,9 +235,9 @@ export class SlackBot {
         name: "eyes",
       });
 
-      // Send response in thread
+      // Send response in thread (convert markdown to Slack format)
       const message = await say({
-        text: response.text,
+        text: this.toSlackFormat(response.text),
         thread_ts: context.threadTs,
       });
 
@@ -296,6 +346,16 @@ export class SlackBot {
   private cleanMentionText(text: string): string {
     // Remove the @mention at the start
     return text.replace(/<@[A-Z0-9]+>/g, "").trim();
+  }
+
+  /**
+   * Convert markdown formatting to Slack formatting
+   * Claude outputs markdown by default, but Slack uses different syntax
+   */
+  private toSlackFormat(text: string): string {
+    // Convert **bold** to *bold* (markdown to Slack)
+    // Use negative lookbehind/lookahead to avoid converting already-correct *single* asterisks
+    return text.replace(/\*\*([^*]+)\*\*/g, "*$1*");
   }
 
   /**

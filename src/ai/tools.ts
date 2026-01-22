@@ -706,9 +706,9 @@ export const ashbyTools: Tool[] = [
     },
   },
   {
-    name: "create_offer",
+    name: "start_offer_process",
     description:
-      "Create a job offer for a candidate. This action requires confirmation.",
+      "Start an offer process for a candidate. This is step 1 of the 3-step offer creation flow. Returns an offerProcessId for use in start_offer.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -720,50 +720,52 @@ export const ashbyTools: Tool[] = [
           type: "string",
           description: "Name or email to find the candidate (if candidate_id not known)",
         },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "start_offer",
+    description:
+      "Start an offer version within an offer process. This is step 2 of the 3-step offer creation flow. Returns the offer form definition that needs to be filled out.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
         offer_process_id: {
           type: "string",
-          description: "The offer process ID (template) to use",
-        },
-        start_date: {
-          type: "string",
-          description: "Start date in ISO format (YYYY-MM-DD)",
-        },
-        salary: {
-          type: "number",
-          description: "Annual salary amount",
-        },
-        salary_frequency: {
-          type: "string",
-          description: "Annual or Hourly (default: Annual)",
-        },
-        currency: {
-          type: "string",
-          description: "Currency code (e.g., USD, EUR)",
-        },
-        equity: {
-          type: "number",
-          description: "Equity grant amount (optional)",
-        },
-        signing_bonus: {
-          type: "number",
-          description: "Signing bonus amount (optional)",
-        },
-        relocation_bonus: {
-          type: "number",
-          description: "Relocation bonus amount (optional)",
-        },
-        notes: {
-          type: "string",
-          description: "Internal notes about the offer",
+          description: "The offer process ID from start_offer_process",
         },
       },
-      required: ["offer_process_id", "start_date", "salary"],
+      required: ["offer_process_id"],
+    },
+  },
+  {
+    name: "create_offer",
+    description:
+      "Submit a filled offer form to create an offer. This is step 3 of the 3-step offer creation flow. Flow: start_offer_process -> start_offer -> create_offer. This action requires confirmation.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        offer_process_id: {
+          type: "string",
+          description: "The offer process ID from start_offer_process",
+        },
+        offer_form_id: {
+          type: "string",
+          description: "The offer form ID from start_offer",
+        },
+        offer_form: {
+          type: "object",
+          description: "The filled form values. Field types: Boolean (true/false), Currency ({currencyCode: 'USD', value: 100000}), Date (ISO string), Number (integer), String, ValueSelect (string matching option), MultiValueSelect (array of strings)",
+        },
+      },
+      required: ["offer_process_id", "offer_form_id", "offer_form"],
     },
   },
   {
     name: "update_offer",
     description:
-      "Update an existing offer (salary, start date, bonuses, etc.). This action requires confirmation.",
+      "Update an existing offer with new form values. Creates a new version and retriggers approval steps. This action requires confirmation.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -771,62 +773,35 @@ export const ashbyTools: Tool[] = [
           type: "string",
           description: "The offer ID to update",
         },
-        salary: {
-          type: "number",
-          description: "New salary amount",
-        },
-        start_date: {
-          type: "string",
-          description: "New start date in ISO format (YYYY-MM-DD)",
-        },
-        equity: {
-          type: "number",
-          description: "New equity amount",
-        },
-        signing_bonus: {
-          type: "number",
-          description: "New signing bonus",
-        },
-        notes: {
-          type: "string",
-          description: "Updated notes",
+        offer_form: {
+          type: "object",
+          description: "The updated form values (can be retrieved from offer.info)",
         },
       },
-      required: ["offer_id"],
+      required: ["offer_id", "offer_form"],
     },
   },
   {
     name: "approve_offer",
     description:
-      "Approve an offer (requires approval workflow). This action requires confirmation.",
+      "Approve an offer or a specific approval step. This action requires confirmation.",
     input_schema: {
       type: "object" as const,
       properties: {
-        offer_id: {
+        offer_version_id: {
           type: "string",
-          description: "The offer ID to approve",
+          description: "The offer version ID to approve (from approval.list as entityId)",
         },
-        approver_id: {
+        approval_step_id: {
           type: "string",
-          description: "User ID of the approver",
+          description: "Optional: specific approval step ID to approve (requires user_id)",
         },
-      },
-      required: ["offer_id", "approver_id"],
-    },
-  },
-  {
-    name: "send_offer",
-    description:
-      "Send offer to candidate (after all approvals). This action requires confirmation.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        offer_id: {
+        user_id: {
           type: "string",
-          description: "The offer ID to send",
+          description: "User ID of the approver (required if approval_step_id is provided)",
         },
       },
-      required: ["offer_id"],
+      required: ["offer_version_id"],
     },
   },
 
@@ -836,25 +811,17 @@ export const ashbyTools: Tool[] = [
   {
     name: "list_all_interviews",
     description:
-      "List all interviews, optionally filtered by application, interviewer, or date range.",
+      "List all interview templates (not scheduled events). For scheduled interviews, use get_upcoming_interviews or check interview schedules.",
     input_schema: {
       type: "object" as const,
       properties: {
-        candidate_id: {
-          type: "string",
-          description: "Filter by candidate (will find their application)",
+        include_archived: {
+          type: "boolean",
+          description: "Include archived interviews (default: false)",
         },
-        user_id: {
-          type: "string",
-          description: "Filter by interviewer user ID",
-        },
-        start_date: {
-          type: "string",
-          description: "Filter interviews after this date (ISO format)",
-        },
-        end_date: {
-          type: "string",
-          description: "Filter interviews before this date (ISO format)",
+        include_non_shared: {
+          type: "boolean",
+          description: "Include non-shared interviews (default: false)",
         },
       },
       required: [],
@@ -943,19 +910,27 @@ export const ashbyTools: Tool[] = [
       properties: {
         name: {
           type: "string",
-          description: "Candidate's full name",
+          description: "Candidate's full name (required)",
         },
         email: {
           type: "string",
-          description: "Candidate's email address",
+          description: "Candidate's primary email address",
         },
         phone_number: {
           type: "string",
-          description: "Phone number (optional)",
+          description: "Candidate's phone number",
         },
         linkedin_url: {
           type: "string",
-          description: "LinkedIn profile URL (optional)",
+          description: "LinkedIn profile URL (must be valid URL)",
+        },
+        github_url: {
+          type: "string",
+          description: "Github profile URL (must be valid URL)",
+        },
+        website: {
+          type: "string",
+          description: "Candidate's website URL (must be valid URL)",
         },
         source_id: {
           type: "string",
@@ -964,10 +939,10 @@ export const ashbyTools: Tool[] = [
         tags: {
           type: "array",
           items: { type: "string" },
-          description: "Tags to apply to candidate",
+          description: "Tag IDs to apply to candidate (use list_candidate_tags to find IDs)",
         },
       },
-      required: ["name", "email"],
+      required: ["name"],
     },
   },
   {
@@ -1160,11 +1135,12 @@ export function getToolNames(category?: "read" | "write"): string[] {
     "schedule_interview",
     "reject_candidate",
     "set_reminder",
-    // Phase 1: Offers (write operations)
+    // Phase 1: Offers (3-step flow: start_offer_process -> start_offer -> create_offer)
+    "start_offer_process",
+    "start_offer",
     "create_offer",
     "update_offer",
     "approve_offer",
-    "send_offer",
     // Phase 1: Interviews (write operations)
     "reschedule_interview",
     "cancel_interview",

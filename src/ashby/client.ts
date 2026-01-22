@@ -25,6 +25,7 @@ import type {
   ApplicationStatus,
   JobStatus,
   CreateCandidateParams,
+  CriteriaEvaluation,
 } from "../types/index.js";
 
 interface CacheEntry<T> {
@@ -213,6 +214,15 @@ export class AshbyClient {
   // Candidates
   // ===========================================================================
 
+  /**
+   * Search for candidates by email or name.
+   *
+   * IMPORTANT: Results are limited to 100 candidates max.
+   * This endpoint is designed for autocomplete/lookup use cases.
+   * For larger result sets, use listCandidates() with pagination.
+   *
+   * When multiple search parameters are provided, they are combined with AND.
+   */
   async searchCandidates(query: string): Promise<Candidate[]> {
     return this.request<Candidate[]>("candidate.search", {
       email: query.includes("@") ? query : undefined,
@@ -281,6 +291,19 @@ export class AshbyClient {
     });
   }
 
+  /**
+   * List AI criteria evaluations for an application.
+   * Requires the AI Application Review feature to be enabled for your organization.
+   *
+   * Note: The exact response structure may vary. Test with your API to verify fields.
+   */
+  async listCriteriaEvaluations(applicationId: string): Promise<CriteriaEvaluation[]> {
+    return this.getAllPaginated<CriteriaEvaluation>(
+      "application.listCriteriaEvaluations",
+      { applicationId }
+    );
+  }
+
   // ===========================================================================
   // Jobs
   // ===========================================================================
@@ -294,7 +317,9 @@ export class AshbyClient {
     const cached = this.getCached<Job[]>(cacheKey);
     if (cached) return cached;
 
-    // Ashby API doesn't support status filter directly, so we fetch all and filter client-side
+    // job.list doesn't support status filtering directly.
+    // job.search exists but only searches by title, not status.
+    // So we fetch all jobs and filter client-side for status filtering.
     const allJobs = await this.getAllPaginated<Job>("job.list");
     const results = status ? allJobs.filter(job => job.status === status) : allJobs;
     this.setCache(cacheKey, results, AshbyClient.CACHE_TTL.jobs);
@@ -309,19 +334,27 @@ export class AshbyClient {
   // Interview Stages
   // ===========================================================================
 
+  /**
+   * List all interview stages across all interview plans.
+   * Uses interviewStage.list API which requires an interviewPlanId,
+   * so we first fetch all plans and then get stages for each.
+   */
   async listInterviewStages(): Promise<InterviewStage[]> {
     const cacheKey = "stages:all";
     const cached = this.getCached<InterviewStage[]>(cacheKey);
     if (cached) return cached;
 
-    // Ashby API doesn't have a global interviewStage.list endpoint.
-    // We extract unique stages from active applications which include currentInterviewStage.
-    const applications = await this.getAllPaginated<Application>("application.list", { status: "Active" });
+    // Get all interview plans first
+    const plans = await this.listInterviewPlans();
 
+    // Fetch stages for each plan and deduplicate by ID
     const stageMap = new Map<string, InterviewStage>();
-    for (const app of applications) {
-      if (app.currentInterviewStage && !stageMap.has(app.currentInterviewStage.id)) {
-        stageMap.set(app.currentInterviewStage.id, app.currentInterviewStage);
+    for (const plan of plans) {
+      const stages = await this.listInterviewStagesForPlan(plan.id);
+      for (const stage of stages) {
+        if (!stageMap.has(stage.id)) {
+          stageMap.set(stage.id, stage);
+        }
       }
     }
 
@@ -330,10 +363,38 @@ export class AshbyClient {
     return results;
   }
 
-  async getInterviewStage(stageId: string): Promise<InterviewStage | null> {
-    // Get stage from the cached list
-    const stages = await this.listInterviewStages();
-    return stages.find(s => s.id === stageId) ?? null;
+  /**
+   * List interview stages for a specific interview plan, in order.
+   * Uses the interviewStage.list API endpoint.
+   */
+  async listInterviewStagesForPlan(interviewPlanId: string): Promise<InterviewStage[]> {
+    const cacheKey = `stages:plan:${interviewPlanId}`;
+    const cached = this.getCached<InterviewStage[]>(cacheKey);
+    if (cached) return cached;
+
+    const response = await this.request<{ interviewStages: InterviewStage[] }>(
+      "interviewStage.list",
+      { interviewPlanId }
+    );
+    const stages = response.interviewStages ?? [];
+    this.setCache(cacheKey, stages, AshbyClient.CACHE_TTL.stages);
+    return stages;
+  }
+
+  /**
+   * Get a single interview stage by ID.
+   * Uses the interviewStage.info API endpoint.
+   */
+  async getInterviewStage(interviewStageId: string): Promise<InterviewStage | null> {
+    try {
+      return await this.request<InterviewStage>("interviewStage.info", { interviewStageId });
+    } catch (error) {
+      // Return null if stage not found
+      if (error instanceof AshbyApiError && error.statusCode === 404) {
+        return null;
+      }
+      throw error;
+    }
   }
 
   // ===========================================================================
@@ -448,14 +509,38 @@ export class AshbyClient {
     return reasons;
   }
 
+  /**
+   * Archive an application by moving it to an Archived interview stage.
+   *
+   * @param applicationId - The application to archive
+   * @param interviewStageId - The ID of an interview stage with type "Archived"
+   * @param archiveReasonId - The reason for archiving (from archiveReason.list)
+   * @param archiveEmail - Optional email to send to the candidate
+   *
+   * NOTE: The interviewStageId MUST be a stage with interviewStageType="Archived".
+   * Use listInterviewStages() to find archived stages for the job's interview plan.
+   */
   async archiveApplication(
     applicationId: string,
-    archiveReasonId: string
+    interviewStageId: string,
+    archiveReasonId: string,
+    archiveEmail?: {
+      subject: string;
+      body: string;
+      sendAt?: string;
+    }
   ): Promise<Application> {
-    return this.request<Application>("application.changeStage", {
+    const params: Record<string, unknown> = {
       applicationId,
+      interviewStageId,
       archiveReasonId,
-    });
+    };
+
+    if (archiveEmail) {
+      params.archiveEmail = archiveEmail;
+    }
+
+    return this.request<Application>("application.changeStage", params);
   }
 
   // ===========================================================================
@@ -518,13 +603,22 @@ export class AshbyClient {
   // Interviews
   // ===========================================================================
 
-  async listInterviews(filters?: {
-    applicationId?: string;
-    userId?: string;
-    startDate?: string;
-    endDate?: string;
+  /**
+   * List all interviews (interview templates, not scheduled events).
+   *
+   * NOTE: The Ashby API does NOT support filtering by applicationId, userId,
+   * startDate, or endDate. If you need interviews for a specific application,
+   * use listInterviewSchedules(applicationId) instead.
+   *
+   * @param options.includeArchived - Include archived interviews (default: false)
+   * @param options.includeNonSharedInterviews - Include job-specific interviews (default: false)
+   */
+  async listInterviews(options?: {
+    includeArchived?: boolean;
+    includeNonSharedInterviews?: boolean;
+    excludeArchivedScheduleTemplateInterviews?: boolean;
   }): Promise<Interview[]> {
-    return this.getAllPaginated<Interview>("interview.list", filters);
+    return this.getAllPaginated<Interview>("interview.list", options);
   }
 
   async getInterview(interviewId: string): Promise<Interview> {
@@ -561,15 +655,39 @@ export class AshbyClient {
   // Feedback
   // ===========================================================================
 
+  /**
+   * List feedback submissions for an application.
+   * Uses applicationFeedback.list API which requires applicationId.
+   *
+   * NOTE: interviewId and authorId filters are applied client-side since
+   * the Ashby API doesn't support these as query parameters.
+   */
   async listFeedbackSubmissions(filters?: {
     applicationId?: string;
     interviewId?: string;
     authorId?: string;
   }): Promise<FeedbackSubmission[]> {
-    return this.getAllPaginated<FeedbackSubmission>(
-      "feedbackSubmission.list",
-      filters
-    );
+    if (!filters?.applicationId) {
+      // Without applicationId, we can't query - return empty
+      // The Ashby API requires applicationId for feedback queries
+      console.warn("[Ashby] listFeedbackSubmissions called without applicationId - returning empty");
+      return [];
+    }
+
+    // Use the correct API endpoint
+    let submissions = await this.getApplicationFeedback(filters.applicationId);
+
+    // Apply client-side filtering for interviewId if provided
+    if (filters.interviewId) {
+      submissions = submissions.filter(s => s.interviewId === filters.interviewId);
+    }
+
+    // Apply client-side filtering for authorId if provided
+    if (filters.authorId) {
+      submissions = submissions.filter(s => s.submittedByUser?.id === filters.authorId);
+    }
+
+    return submissions;
   }
 
   // ===========================================================================
@@ -587,60 +705,93 @@ export class AshbyClient {
     return this.request<Offer>("offer.info", { offerId });
   }
 
+  /**
+   * Creates an offer using a form-based submission.
+   *
+   * Flow: offerProcess.start -> offer.start -> offer.create
+   *
+   * @param offerProcessId - From offerProcess.start response
+   * @param offerFormId - From offer.start response
+   * @param offerForm - Form values keyed by field path. Field types:
+   *   - Boolean: true/false
+   *   - Currency: { currencyCode: "USD", value: 100000 }
+   *   - Date: ISO date string
+   *   - Number: integer
+   *   - String: string
+   *   - ValueSelect: string matching a selectable option
+   *   - MultiValueSelect: array of strings matching selectable options
+   */
   async createOffer(params: {
-    applicationId: string;
     offerProcessId: string;
-    startDate: string;
-    salary: number;
-    salaryFrequency?: "Annual" | "Hourly";
-    currency?: string;
-    equity?: number;
-    equityType?: string;
-    signingBonus?: number;
-    relocationBonus?: number;
-    variableCompensation?: number;
-    notes?: string;
+    offerFormId: string;
+    offerForm: Record<string, unknown>;
   }): Promise<Offer> {
     return this.request<Offer>("offer.create", params);
   }
 
+  /**
+   * Updates an existing offer using a form-based submission.
+   * Creates a new version and retrigggers approval steps.
+   */
   async updateOffer(
     offerId: string,
-    updates: {
-      salary?: number;
-      startDate?: string;
-      equity?: number;
-      signingBonus?: number;
-      relocationBonus?: number;
-      variableCompensation?: number;
-      notes?: string;
-    }
+    offerForm: Record<string, unknown>
   ): Promise<Offer> {
     return this.request<Offer>("offer.update", {
       offerId,
-      ...updates,
+      offerForm,
     });
   }
 
-  async approveOffer(offerId: string, approverId: string): Promise<Offer> {
-    return this.request<Offer>("offer.approve", {
-      offerId,
-      approverId,
-    });
+  /**
+   * Approves an offer or a specific approval step.
+   *
+   * @param offerVersionId - The offer version ID (from approval.list as entityId)
+   * @param approvalStepId - Optional: specific step to approve (requires userId)
+   * @param userId - Required if approvalStepId is provided
+   */
+  async approveOffer(
+    offerVersionId: string,
+    approvalStepId?: string,
+    userId?: string
+  ): Promise<Offer> {
+    const params: Record<string, string> = { offerVersionId };
+    if (approvalStepId) params.approvalStepId = approvalStepId;
+    if (userId) params.userId = userId;
+    return this.request<Offer>("offer.approve", params);
   }
 
-  async startOffer(offerId: string): Promise<Offer> {
-    return this.request<Offer>("offer.start", { offerId });
+  /**
+   * Creates a new offer version for an in-progress offer process.
+   * Returns an offer form that can be filled out and submitted via offer.create.
+   *
+   * @param offerProcessId - From offerProcess.start response
+   */
+  async startOffer(offerProcessId: string): Promise<{
+    id: string;
+    offerFormId: string;
+    offerFormDefinition: Record<string, unknown>;
+  }> {
+    return this.request<{
+      id: string;
+      offerFormId: string;
+      offerFormDefinition: Record<string, unknown>;
+    }>("offer.start", { offerProcessId });
   }
 
-  async startOfferProcess(
-    applicationId: string,
-    offerProcessId: string
-  ): Promise<{ success: boolean }> {
-    return this.request<{ success: boolean }>("offerProcess.start", {
-      applicationId,
-      offerProcessId,
-    });
+  /**
+   * Starts an offer process for a candidate.
+   *
+   * @param applicationId - The application to start an offer process for
+   */
+  async startOfferProcess(applicationId: string): Promise<{
+    id: string;
+    applicationId: string;
+  }> {
+    return this.request<{
+      id: string;
+      applicationId: string;
+    }>("offerProcess.start", { applicationId });
   }
 
   // ===========================================================================
@@ -698,8 +849,23 @@ export class AshbyClient {
   // Feedback & Custom Fields
   // ===========================================================================
 
-  async getFeedbackSubmission(feedbackSubmissionId: string): Promise<any> {
-    return this.request<any>("feedbackSubmission.info", { feedbackSubmissionId });
+  /**
+   * Get a single feedback submission by ID.
+   *
+   * NOTE: The Ashby API does not have a feedbackSubmission.info endpoint.
+   * This method throws an error to indicate the limitation.
+   *
+   * To get feedback details, use getApplicationFeedback(applicationId) which
+   * returns all feedback submissions for an application with full details.
+   *
+   * @deprecated Use getApplicationFeedback(applicationId) instead and filter by ID
+   */
+  async getFeedbackSubmission(_feedbackSubmissionId: string): Promise<FeedbackSubmission> {
+    throw new AshbyApiError(
+      "The feedbackSubmission.info endpoint does not exist in the Ashby API. " +
+      "Use getApplicationFeedback(applicationId) to get feedback submissions with full details.",
+      400
+    );
   }
 
   async listCustomFields(): Promise<Array<{ id: string; title: string; fieldType: string }>> {
