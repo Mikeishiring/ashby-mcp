@@ -526,14 +526,14 @@ export class AshbyService {
     const jobs = jobsResult.status === "fulfilled" ? jobsResult.value : [];
     const jobMap = new Map(jobs.map((j) => [j.id, j]));
 
-    const activeApp = this.selectActiveApplication(applications, applicationId);
-    if (!activeApp) {
-      throw new Error("No active application found for this candidate");
+    const selectedApp = this.selectApplicationForRead(applications, applicationId);
+    if (!selectedApp) {
+      throw new Error("No application found for this candidate");
     }
 
     let submissions: FeedbackSubmission[] = [];
     try {
-      submissions = await this.client.getApplicationFeedback(activeApp.id);
+      submissions = await this.client.getApplicationFeedback(selectedApp.id);
     } catch {
       submissions = [];
     }
@@ -693,7 +693,7 @@ export class AshbyService {
     }
 
     // Get the primary job for this candidate
-    const job = jobMap.get(activeApp.jobId) ?? null;
+    const job = jobMap.get(selectedApp.jobId) ?? null;
 
     return {
       candidate,
@@ -878,8 +878,8 @@ export class AshbyService {
     const { candidate, applications, notes } = context;
 
     // Get the active application's job
-    const activeApp = this.selectActiveApplication(applications, applicationId);
-    const job = activeApp?.job ?? null;
+    const selectedApp = this.selectApplicationForRead(applications, applicationId);
+    const job = selectedApp?.job ?? null;
 
     // Find upcoming interview
     const now = new Date();
@@ -894,9 +894,9 @@ export class AshbyService {
     if (candidate.source?.title) {
       highlights.push(`Source: ${candidate.source.title}`);
     }
-    if (activeApp?.currentInterviewStage) {
-      highlights.push(`Current Stage: ${activeApp.currentInterviewStage.title}`);
-      highlights.push(`Days in Stage: ${activeApp.daysInCurrentStage}`);
+    if (selectedApp?.currentInterviewStage) {
+      highlights.push(`Current Stage: ${selectedApp.currentInterviewStage.title}`);
+      highlights.push(`Days in Stage: ${selectedApp.daysInCurrentStage}`);
     }
     if (candidate.socialLinks.length > 0) {
       const linkedin = candidate.socialLinks.find((l) => l.type === "LinkedIn" || l.url.includes("linkedin"));
@@ -1158,6 +1158,44 @@ export class AshbyService {
     return activeApps[0] ?? null;
   }
 
+  private selectApplicationForRead<T extends { id: string; status: Application["status"]; updatedAt: string }>(
+    applications: T[],
+    applicationId?: string
+  ): T | null {
+    if (applicationId) {
+      const match = applications.find((app) => app.id === applicationId);
+      if (!match) {
+        throw new Error("Provided application_id does not belong to this candidate.");
+      }
+      return match;
+    }
+
+    const activeApps = applications.filter((app) => app.status === "Active");
+    if (activeApps.length === 1) {
+      return activeApps[0]!;
+    }
+    if (activeApps.length > 1) {
+      const ids = activeApps.slice(0, 3).map((app) => app.id);
+      const extraCount = activeApps.length - ids.length;
+      const hint = ids.length > 0
+        ? ` (e.g., ${ids.join(", ")}${extraCount > 0 ? ` and ${extraCount} more` : ""})`
+        : "";
+      throw new Error(
+        `Multiple active applications found for this candidate. Please provide application_id${hint}.`
+      );
+    }
+
+    if (applications.length === 0) {
+      return null;
+    }
+
+    const nonArchived = applications.filter((app) => app.status !== "Archived");
+    const pool = nonArchived.length > 0 ? nonArchived : applications;
+    return [...pool].sort(
+      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+    )[0] ?? null;
+  }
+
   private buildFeedbackFieldLookup(
     submission: FeedbackSubmission
   ): Map<
@@ -1359,13 +1397,13 @@ export class AshbyService {
     const { candidate, applications } = await this.client.getCandidateWithApplications(candidateId);
 
     // Find active application
-    const activeApp = this.selectActiveApplication(applications, applicationId);
-    if (!activeApp) {
-      throw new Error("No active application found for candidate");
+    const selectedApp = this.selectApplicationForRead(applications, applicationId);
+    if (!selectedApp) {
+      throw new Error("No application found for candidate");
     }
 
     // Get full application details
-    const application = await this.client.getApplication(activeApp.id);
+    const application = await this.client.getApplication(selectedApp.id);
 
     // Get current stage (already populated in getApplication)
     let currentStage: InterviewStage | null | undefined = application.currentInterviewStage;
@@ -1373,7 +1411,13 @@ export class AshbyService {
       currentStage = await this.client.getInterviewStage(application.currentInterviewStageId);
     }
     if (!currentStage) {
-      throw new Error("Current interview stage not found");
+      const fallbackTitle = application.status === "Active" ? "Unknown" : application.status;
+      currentStage = {
+        id: application.currentInterviewStageId ?? `status:${fallbackTitle.toLowerCase()}`,
+        title: fallbackTitle,
+        orderInInterviewPlan: 0,
+        interviewStageType: "Application",
+      };
     }
 
     // Calculate days in stage (use updatedAt as approximation)

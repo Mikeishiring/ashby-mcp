@@ -32,10 +32,17 @@ for (let i = 0; i < args.length; i += 1) {
   }
 }
 
-const candidateId = flags.get("candidate-id") ?? flags.get("candidate_id");
+const candidateIdFlag = flags.get("candidate-id") ?? flags.get("candidate_id");
 const applicationIdArg = flags.get("application-id") ?? flags.get("application_id");
 const interviewId = flags.get("interview-id") ?? flags.get("interview_id");
 const limit = Math.max(parseInt(flags.get("limit") ?? "5", 10) || 5, 1);
+const nameOrEmail =
+  flags.get("name_or_email") ??
+  flags.get("name-or-email") ??
+  flags.get("name") ??
+  flags.get("email") ??
+  flags.get("query");
+const candidateIndex = flags.get("candidate-index") ?? flags.get("candidate_index");
 
 const ashbyApiKey = process.env["ASHBY_API_KEY"] ?? "";
 const baseUrl = process.env["ASHBY_BASE_URL"] ?? "https://api.ashbyhq.com";
@@ -45,8 +52,10 @@ if (!ashbyApiKey) {
   process.exit(1);
 }
 
-if (!candidateId && !applicationIdArg && !interviewId) {
-  console.error("Usage: npx tsx scripts/verify-feedback.ts --candidate-id <id> [--application-id <id>] [--interview-id <id>] [--limit 5]");
+if (!candidateIdFlag && !applicationIdArg && !interviewId && !nameOrEmail) {
+  console.error(
+    "Usage: npx tsx scripts/verify-feedback.ts --candidate-id <id> | --name <query> [--application-id <id>] [--interview-id <id>] [--limit 5]"
+  );
   process.exit(1);
 }
 
@@ -99,7 +108,42 @@ const summarizeSubmission = async (submissionId: string) => {
   return detail;
 };
 
+const resolveCandidateId = async (): Promise<string | null> => {
+  if (candidateIdFlag) return candidateIdFlag;
+  if (!nameOrEmail) return null;
+
+  const matches = await client.searchCandidates(nameOrEmail);
+  if (matches.length === 0) {
+    console.error(`No candidates found for "${nameOrEmail}".`);
+    return null;
+  }
+
+  if (matches.length === 1) {
+    return matches[0]!.id;
+  }
+
+  const index = candidateIndex ? parseInt(candidateIndex, 10) : NaN;
+  if (!Number.isNaN(index) && index > 0 && index <= matches.length) {
+    return matches[index - 1]!.id;
+  }
+
+  console.error(`Multiple candidates matched "${nameOrEmail}". Please re-run with --candidate-id or --candidate-index:`);
+  matches.slice(0, 10).forEach((candidate, idx) => {
+    const email = candidate.primaryEmailAddress?.value ?? "no email";
+    console.error(`  ${idx + 1}. ${candidate.name} (${email}) [${candidate.id}]`);
+  });
+  if (matches.length > 10) {
+    console.error(`  ...and ${matches.length - 10} more`);
+  }
+  return null;
+};
+
 const run = async () => {
+  const candidateId = await resolveCandidateId();
+  if (!candidateId && !applicationIdArg && !interviewId) {
+    process.exit(1);
+  }
+
   let applicationId = applicationIdArg;
 
   if (!applicationId && candidateId) {
