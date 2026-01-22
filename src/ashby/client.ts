@@ -358,31 +358,48 @@ export class AshbyClient {
   // Interview Stages
   // ===========================================================================
 
-  async listInterviewStages(): Promise<InterviewStage[]> {
-    const cacheKey = "stages:all";
+  async listInterviewStages(jobId?: string): Promise<InterviewStage[]> {
+    const cacheKey = jobId ? `stages:job:${jobId}` : "stages:all";
     const cached = this.getCached<InterviewStage[]>(cacheKey);
     if (cached) return cached;
 
     const stageMap = new Map<string, InterviewStage>();
 
-    // Prefer interview plans to build a complete stage list without relying on active applications.
-    const plans = await this.listInterviewPlans();
-    for (const plan of plans) {
-      for (const stage of plan.interviewStages) {
+    try {
+      const params = jobId ? { jobId } : {};
+      const stages = await this.getAllPaginated<InterviewStage>("interviewStage.list", params);
+      for (const stage of stages) {
         if (stage?.id) {
           stageMap.set(stage.id, stage);
         }
       }
+    } catch (error) {
+      console.warn("[Ashby] interviewStage.list failed, falling back to plans/applications.", error);
     }
 
-    if (stageMap.size === 0) {
-      // Fallback: extract unique stages from active applications.
-      const applications = await this.getAllPaginated<Application>("application.list", { status: "Active" });
+    try {
+      const plans = await this.listInterviewPlans();
+      for (const plan of plans) {
+        for (const stage of plan.interviewStages) {
+          if (stage?.id) {
+            stageMap.set(stage.id, stage);
+          }
+        }
+      }
+    } catch (error) {
+      console.warn("[Ashby] interviewPlan.list failed while building stage cache.", error);
+    }
+
+    try {
+      const filters = jobId ? { status: "Active", jobId } : { status: "Active" };
+      const applications = await this.getAllPaginated<Application>("application.list", filters);
       for (const app of applications) {
-        if (app.currentInterviewStage && !stageMap.has(app.currentInterviewStage.id)) {
+        if (app.currentInterviewStage?.id) {
           stageMap.set(app.currentInterviewStage.id, app.currentInterviewStage);
         }
       }
+    } catch (error) {
+      console.warn("[Ashby] application.list failed while building stage cache.", error);
     }
 
     const results = Array.from(stageMap.values());
@@ -391,9 +408,12 @@ export class AshbyClient {
   }
 
   async getInterviewStage(stageId: string): Promise<InterviewStage | null> {
-    // Get stage from the cached list
-    const stages = await this.listInterviewStages();
-    return stages.find(s => s.id === stageId) ?? null;
+    // Use the official interviewStage.info endpoint
+    try {
+      return await this.request<InterviewStage>("interviewStage.info", { interviewStageId: stageId });
+    } catch {
+      return null;
+    }
   }
 
   // ===========================================================================
@@ -419,9 +439,10 @@ export class AshbyClient {
     interviewEvents: Array<{
       startTime: string;
       endTime: string;
-      interviewerIds: string[];
+      interviewers: Array<{ email: string; feedbackRequired?: boolean }>;
       location?: string;
       meetingLink?: string;
+      interviewId?: string;
     }>
   ): Promise<InterviewSchedule> {
     return this.request<InterviewSchedule>("interviewSchedule.create", {
@@ -535,9 +556,23 @@ export class AshbyClient {
     applications: Application[];
   }> {
     const candidate = await this.getCandidate(candidateId);
-    const applications = await Promise.all(
+
+    // Use allSettled to handle individual application failures gracefully
+    // (e.g., if an application was deleted or access is restricted)
+    const results = await Promise.allSettled(
       candidate.applicationIds.map((id) => this.getApplication(id))
     );
+
+    const applications = results
+      .filter((r): r is PromiseFulfilledResult<Application> => r.status === "fulfilled")
+      .map((r) => r.value);
+
+    // Log any failures for debugging but don't crash
+    const failures = results.filter((r) => r.status === "rejected");
+    if (failures.length > 0) {
+      console.warn(`[Ashby] Failed to fetch ${failures.length} application(s) for candidate ${candidateId}`);
+    }
+
     return { candidate, applications };
   }
 
@@ -596,9 +631,10 @@ export class AshbyClient {
     interviewEvents: Array<{
       startTime: string;
       endTime: string;
-      interviewerIds: string[];
+      interviewers: Array<{ email: string; feedbackRequired?: boolean }>;
       location?: string;
       meetingLink?: string;
+      interviewEventId?: string;
     }>
   ): Promise<InterviewSchedule> {
     return this.request<InterviewSchedule>("interviewSchedule.update", {

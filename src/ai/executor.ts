@@ -118,6 +118,7 @@ export class ToolExecutor {
           toolName === "set_reminder" ? true : check.requiresConfirmation;
 
         if (requiresConfirmation) {
+          // Return pending confirmation for user to approve
           return {
             success: true,
             requiresConfirmation: true,
@@ -128,9 +129,12 @@ export class ToolExecutor {
             },
           };
         }
+
+        // BATCH_LIMIT mode: execute write operation directly (no confirmation needed)
+        return await this.executeConfirmed(toolName, input, candidateId ?? undefined);
       }
 
-      // Execute the tool
+      // Execute read-only tool
       return await this.executeInternal(toolName, input);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
@@ -800,7 +804,6 @@ export class ToolExecutor {
       }
 
       case "list_feedback_submissions": {
-        // Build filters
         const filters: {
           applicationId?: string;
           interviewId?: string;
@@ -818,7 +821,6 @@ export class ToolExecutor {
           filters.applicationId = input.application_id;
         }
 
-        // Get application ID for the candidate if provided
         if (this.hasCandidateInput(input)) {
           const candidateId = await this.resolveReadableCandidateId(input);
           if (!candidateId) {
@@ -853,7 +855,6 @@ export class ToolExecutor {
           filters.applicationId = interview.applicationId;
         }
 
-        // Add interview filter if provided
         if (input.interview_id) {
           filters.interviewId = input.interview_id;
         }

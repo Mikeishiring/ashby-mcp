@@ -120,12 +120,24 @@ export class AshbyService {
     applications: ApplicationWithContext[];
     notes: Note[];
   }> {
-    const [{ candidate, applications }, notes, stages, jobs] = await Promise.all([
+    // Use Promise.allSettled for resilience - partial data is better than no data
+    const [candidateResult, notesResult, stagesResult, jobsResult] = await Promise.allSettled([
       this.client.getCandidateWithApplications(candidateId),
       this.client.getCandidateNotes(candidateId),
       this.client.listInterviewStages(),
       this.client.listJobs(),
     ]);
+
+    // Candidate data is required - throw if it fails
+    if (candidateResult.status === "rejected") {
+      throw candidateResult.reason;
+    }
+    const { candidate, applications } = candidateResult.value;
+
+    // Notes, stages, and jobs are optional - use empty arrays on failure
+    const notes = notesResult.status === "fulfilled" ? notesResult.value : [];
+    const stages = stagesResult.status === "fulfilled" ? stagesResult.value : [];
+    const jobs = jobsResult.status === "fulfilled" ? jobsResult.value : [];
 
     const stageMap = new Map(stages.map((s) => [s.id, s]));
     const jobMap = new Map(jobs.map((j) => [j.id, j]));
@@ -185,22 +197,41 @@ export class AshbyService {
       this.needsDecision(a)
     ).length;
 
+    // Create fallback stage for unknown stages
+    const fallbackStage: InterviewStage = {
+      id: "unknown",
+      title: "Unknown Stage",
+      orderInInterviewPlan: 999,
+      interviewStageType: "Interview",
+    };
+
+    // Create fallback job for unknown jobs
+    const fallbackJob: Job = {
+      id: "unknown",
+      title: "Unknown Position",
+      status: "Closed",
+      employmentType: "Unknown",
+      hiringTeam: [],
+      jobPostings: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
     return {
       totalCandidates: applications.length,
       byStage: Array.from(byStage.entries())
         .map(([stageId, candidates]) => ({
-          stage: stageMap.get(stageId)!,
+          stage: stageMap.get(stageId) ?? { ...fallbackStage, id: stageId },
           count: candidates.length,
           candidates,
         }))
         .sort((a, b) => a.stage.orderInInterviewPlan - b.stage.orderInInterviewPlan),
       byJob: Array.from(byJob.entries())
         .map(([jobId, candidates]) => ({
-          job: jobMap.get(jobId)!,
+          job: jobMap.get(jobId) ?? { ...fallbackJob, id: jobId },
           count: candidates.length,
           candidates,
         }))
-        .filter((j) => j.job) // Filter out jobs not in our map (closed jobs)
         .sort((a, b) => a.job.title.localeCompare(b.job.title)),
       staleCount,
       needsDecisionCount,
@@ -357,12 +388,15 @@ export class AshbyService {
       candidateId
     );
 
-    // Get schedules for all applications
-    const schedules = await Promise.all(
+    // Get schedules for all applications - use allSettled to handle partial failures
+    const results = await Promise.allSettled(
       applications.map((app) => this.client.listInterviewSchedules(app.id))
     );
 
-    return schedules.flat();
+    // Extract successful results, ignore failures
+    return results
+      .filter((r): r is PromiseFulfilledResult<InterviewSchedule[]> => r.status === "fulfilled")
+      .flatMap((r) => r.value);
   }
 
   async scheduleInterview(
@@ -380,16 +414,31 @@ export class AshbyService {
       throw new Error("No active application found for this candidate");
     }
 
+    // Look up interviewer emails from user IDs
+    const users = await this.client.listUsers();
+    const userMap = new Map(users.map((u) => [u.id, u]));
+
+    const interviewers = interviewerIds.map((id) => {
+      const user = userMap.get(id);
+      if (!user) {
+        throw new Error(`Could not find user with ID ${id}`);
+      }
+      return {
+        email: user.email,
+        feedbackRequired: true,
+      };
+    });
+
     const event: {
       startTime: string;
       endTime: string;
-      interviewerIds: string[];
+      interviewers: Array<{ email: string; feedbackRequired: boolean }>;
       location?: string;
       meetingLink?: string;
     } = {
       startTime,
       endTime,
-      interviewerIds,
+      interviewers,
     };
 
     if (meetingLink) event.meetingLink = meetingLink;
@@ -403,12 +452,19 @@ export class AshbyService {
   // ===========================================================================
 
   async getDailySummaryData(): Promise<DailySummaryData> {
-    const [staleCandidates, needsDecision, summary, recentApps] = await Promise.all([
+    // Use allSettled to ensure partial data is returned even if some calls fail
+    const [staleResult, decisionResult, summaryResult, recentResult] = await Promise.allSettled([
       this.getStaleCandidates(5),
       this.getCandidatesNeedingDecision(5),
       this.getPipelineSummary(),
       this.getRecentApplications(1),
     ]);
+
+    // Extract successful results with empty fallbacks
+    const staleCandidates = staleResult.status === "fulfilled" ? staleResult.value : [];
+    const needsDecision = decisionResult.status === "fulfilled" ? decisionResult.value : [];
+    const summary = summaryResult.status === "fulfilled" ? summaryResult.value : null;
+    const recentApps = recentResult.status === "fulfilled" ? recentResult.value : [];
 
     return {
       staleCandidate: staleCandidates.map((app) => ({
@@ -426,8 +482,8 @@ export class AshbyService {
         daysWaiting: app.daysInCurrentStage,
       })),
       stats: {
-        totalActive: summary.totalCandidates,
-        openRoles: summary.byJob.length,
+        totalActive: summary?.totalCandidates ?? 0,
+        openRoles: summary?.byJob.length ?? 0,
         newApplications: recentApps.length,
       },
     };
@@ -457,11 +513,17 @@ export class AshbyService {
     candidateId: string,
     applicationId?: string
   ): Promise<Scorecard> {
-    const [{ candidate, applications }, jobs] = await Promise.all([
+    const [candidateResult, jobsResult] = await Promise.allSettled([
       this.client.getCandidateWithApplications(candidateId),
       this.client.listJobs(),
     ]);
 
+    if (candidateResult.status === "rejected") {
+      throw candidateResult.reason;
+    }
+
+    const { candidate, applications } = candidateResult.value;
+    const jobs = jobsResult.status === "fulfilled" ? jobsResult.value : [];
     const jobMap = new Map(jobs.map((j) => [j.id, j]));
 
     const activeApp = this.selectActiveApplication(applications, applicationId);
@@ -469,11 +531,12 @@ export class AshbyService {
       throw new Error("No active application found for this candidate");
     }
 
-    const feedbackPromises = [activeApp].map((app) =>
-      this.client.getApplicationFeedback(app.id)
-    );
-    const allFeedback = await Promise.all(feedbackPromises);
-    const submissions = allFeedback.flat();
+    let submissions: FeedbackSubmission[] = [];
+    try {
+      submissions = await this.client.getApplicationFeedback(activeApp.id);
+    } catch {
+      submissions = [];
+    }
 
     // Extract pros, cons, and recommendations from field submissions
     const pros: string[] = [];
@@ -630,7 +693,7 @@ export class AshbyService {
     }
 
     // Get the primary job for this candidate
-    const job = activeApp ? jobMap.get(activeApp.jobId) ?? null : null;
+    const job = jobMap.get(activeApp.jobId) ?? null;
 
     return {
       candidate,
@@ -798,11 +861,19 @@ export class AshbyService {
     candidateId: string,
     applicationId?: string
   ): Promise<PrepPacket> {
-    const [context, scorecard, schedules] = await Promise.all([
+    const [contextResult, scorecardResult, schedulesResult] = await Promise.allSettled([
       this.getCandidateFullContext(candidateId),
-      this.getCandidateScorecard(candidateId, applicationId).catch(() => null),
+      this.getCandidateScorecard(candidateId, applicationId),
       this.getInterviewSchedulesForCandidate(candidateId),
     ]);
+
+    if (contextResult.status === "rejected") {
+      throw contextResult.reason;
+    }
+
+    const context = contextResult.value;
+    const scorecard = scorecardResult.status === "fulfilled" ? scorecardResult.value : null;
+    const schedules = schedulesResult.status === "fulfilled" ? schedulesResult.value : [];
 
     const { candidate, applications, notes } = context;
 
@@ -903,16 +974,31 @@ export class AshbyService {
     meetingLink?: string,
     location?: string
   ): Promise<InterviewSchedule> {
+    // Look up interviewer emails from user IDs
+    const users = await this.client.listUsers();
+    const userMap = new Map(users.map((u) => [u.id, u]));
+
+    const interviewers = interviewerIds.map((id) => {
+      const user = userMap.get(id);
+      if (!user) {
+        throw new Error(`Could not find user with ID ${id}`);
+      }
+      return {
+        email: user.email,
+        feedbackRequired: true,
+      };
+    });
+
     const event: {
       startTime: string;
       endTime: string;
-      interviewerIds: string[];
+      interviewers: Array<{ email: string; feedbackRequired: boolean }>;
       location?: string;
       meetingLink?: string;
     } = {
       startTime: newStartTime,
       endTime: newEndTime,
-      interviewerIds,
+      interviewers,
     };
 
     if (meetingLink) event.meetingLink = meetingLink;
@@ -1185,16 +1271,44 @@ export class AshbyService {
     stageMap: Map<string, InterviewStage>,
     jobMap: Map<string, Job>
   ): ApplicationWithContext {
-    const stage = app.currentInterviewStageId
-      ? stageMap.get(app.currentInterviewStageId) ?? null
-      : null;
+    const stage =
+      app.currentInterviewStage ??
+      (app.currentInterviewStageId
+        ? stageMap.get(app.currentInterviewStageId) ?? null
+        : null);
     const job = jobMap.get(app.jobId);
     const daysInCurrentStage = this.calculateDaysInStage(app);
 
+    // Create fallback job if not found in map (could happen if job was archived/deleted)
+    const fallbackJob: Job = {
+      id: app.jobId,
+      title: "Unknown Position",
+      status: "Closed",
+      employmentType: "Unknown",
+      hiringTeam: [],
+      jobPostings: [],
+      createdAt: app.createdAt,
+      updatedAt: app.updatedAt,
+    };
+
+    // Create fallback candidate if not embedded in application
+    const fallbackCandidate: Candidate = {
+      id: app.candidateId,
+      name: "Unknown Candidate",
+      primaryEmailAddress: null,
+      phoneNumbers: [],
+      socialLinks: [],
+      tags: [],
+      createdAt: app.createdAt,
+      updatedAt: app.updatedAt,
+      applicationIds: [app.id],
+      profileUrl: "",
+    };
+
     return {
       ...app,
-      job: job!,
-      candidate: app.candidate!,
+      job: job ?? fallbackJob,
+      candidate: app.candidate ?? fallbackCandidate,
       currentInterviewStage: stage,
       daysInCurrentStage,
       isStale: this.isStale(app, stage, daysInCurrentStage),
@@ -1254,7 +1368,10 @@ export class AshbyService {
     const application = await this.client.getApplication(activeApp.id);
 
     // Get current stage (already populated in getApplication)
-    const currentStage = application.currentInterviewStage;
+    let currentStage: InterviewStage | null | undefined = application.currentInterviewStage;
+    if (!currentStage && application.currentInterviewStageId) {
+      currentStage = await this.client.getInterviewStage(application.currentInterviewStageId);
+    }
     if (!currentStage) {
       throw new Error("Current interview stage not found");
     }

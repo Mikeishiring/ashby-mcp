@@ -277,7 +277,7 @@ export const ashbyTools: Tool[] = [
   {
     name: "list_feedback_submissions",
     description:
-      "List interview feedback submissions for an application or specific interview. Shows who submitted feedback and when.",
+      "List interview feedback submissions for an application. Shows who submitted feedback and when. Requires either application_id or candidate identification.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -287,19 +287,11 @@ export const ashbyTools: Tool[] = [
         },
         application_id: {
           type: "string",
-          description: "Application ID to use when a candidate has multiple active applications",
+          description: "Application ID to get feedback for (preferred if known)",
         },
-        candidate_name: {
+        name_or_email: {
           type: "string",
-          description: "Candidate name (used to find ID if candidate_id not provided)",
-        },
-        candidate_email: {
-          type: "string",
-          description: "Candidate email (used to find ID if candidate_id not provided)",
-        },
-        interview_id: {
-          type: "string",
-          description: "Optional: Filter to feedback for a specific interview",
+          description: "Candidate name or email (used to find candidate if IDs not provided)",
         },
       },
       required: [],
