@@ -91,12 +91,13 @@ export class ClaudeAgent {
   constructor(
     config: Config,
     ashby: AshbyService,
-    safety: SafetyGuards
+    safety: SafetyGuards,
+    executor?: ToolExecutor
   ) {
     this.client = new Anthropic({ apiKey: config.anthropic.apiKey });
     this.model = config.anthropic.model;
     this.maxTokens = config.anthropic.maxTokens;
-    this.executor = new ToolExecutor(ashby, safety);
+    this.executor = executor ?? new ToolExecutor(ashby, safety);
   }
 
   /**

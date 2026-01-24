@@ -1,6 +1,6 @@
 # Ashby API Endpoint Reference
 **Complete endpoint catalog with implementation status**
-**Last Updated:** 2026-01-22
+**Last Updated:** 2026-01-24
 **Source:** https://developers.ashbyhq.com/reference
 
 ---
@@ -34,6 +34,8 @@
 | Assessments | 5 | 0 | 0% |
 | Other (admin) | ~25 | 0 | 0% |
 | **TOTAL** | **~145** | **43** | **~30%** |
+
+**Note:** We implement 51 tools but use 43 unique Ashby API endpoints (some tools combine multiple calls or use derived data).
 
 ---
 
@@ -433,7 +435,8 @@ These endpoints would add significant value:
 ## Implementation Summary
 
 **Total Ashby API Endpoints:** ~145 (documented)
-**Currently Implemented:** 45 (31%)
+**Currently Implemented:** 43 (~30%)
+**Tools Available:** 51 (some tools combine multiple API calls)
 
 ### By Workflow Coverage:
 

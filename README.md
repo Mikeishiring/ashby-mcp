@@ -1,6 +1,6 @@
 # Ashby Recruiting Assistant 🤖
 
-**Your AI teammate for managing candidates in Ashby - 52 tools covering core recruiter workflows**
+**Your AI teammate for managing candidates in Ashby - 51 tools covering core recruiter workflows**
 
 ---
 
@@ -71,7 +71,7 @@ An AI-powered recruiting assistant that lives in Slack and connects to your Ashb
 - Access custom fields
 - View complete candidate journeys
 
-**Total capabilities:** 52 tools (37 read, 15 write), 45 API endpoints covered
+**Total capabilities:** 51 tools (36 read, 15 write), 43 API endpoints covered
 
 ---
 
@@ -254,8 +254,8 @@ Slack → Claude AI (Anthropic) → Ashby API → Your ATS
 - Node.js 20+ or Docker
 
 ### API Coverage
-- **52 total tools** (37 read, 15 write)
-- **45 of ~145 Ashby API endpoints** (31% of API, 100% of core workflows)
+- **51 total tools** (36 read, 15 write)
+- **43 of ~145 Ashby API endpoints** (~30% of API, 100% of core workflows)
 - **100% TypeScript type-safe**
 - See [API-ENDPOINT-REFERENCE.md](docs/API-ENDPOINT-REFERENCE.md) for full mapping
 
@@ -271,7 +271,7 @@ ashby-mcp/
 │   ├── FAQ.md                     # Frequently asked questions
 │   └── API-ENDPOINT-REFERENCE.md  # Technical API documentation
 ├── src/                           # TypeScript source code
-│   ├── ai/                        # Claude agent & tools (51 tools)
+│   ├── ai/                        # Claude agent & tools
 │   ├── ashby/                     # Ashby API client & service
 │   ├── slack/                     # Slack bot integration
 │   ├── safety/                    # Confirmation & safety guards
@@ -478,4 +478,4 @@ Built with:
 
 ---
 
-*Last Updated: 2026-01-22 | Version 3.0 | 52 tools | 45/145 API endpoints (31%)*
+*Last Updated: 2026-01-24 | Version 3.0 | 51 tools | 43/145 API endpoints (~30%)*

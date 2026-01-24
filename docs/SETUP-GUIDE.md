@@ -473,5 +473,5 @@ Before considering setup complete:
 
 ---
 
-*Last Updated: 2026-01-20*
+*Last Updated: 2026-01-24*
 *Questions? Check the FAQ or create an issue in the repository.*
