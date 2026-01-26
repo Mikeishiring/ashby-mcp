@@ -4,7 +4,7 @@
 
 export { SearchService } from "./search-service.js";
 export { PipelineService } from "./pipeline-service.js";
-export { InterviewService } from "./interview-service.js";
+export { InterviewService, type InterviewStats } from "./interview-service.js";
 export { OfferService } from "./offer-service.js";
 export { FeedbackService } from "./feedback-service.js";
 export { CandidateService } from "./candidate-service.js";

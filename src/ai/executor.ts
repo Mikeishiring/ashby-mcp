@@ -1248,6 +1248,30 @@ export class ToolExecutor {
         return { success: true, data: interviews };
       }
 
+      case "get_interview_stats": {
+        if (!input.start_date || !input.end_date) {
+          return {
+            success: false,
+            error: "Please provide both start_date and end_date for interview statistics.",
+          };
+        }
+        const statsParams: {
+          startDate: string;
+          endDate: string;
+          jobTitle?: string;
+          status?: string;
+        } = {
+          startDate: input.start_date,
+          endDate: input.end_date,
+          status: input.status ?? "Completed",
+        };
+        if (input.job_title) {
+          statsParams.jobTitle = input.job_title;
+        }
+        const stats = await this.ashby.getInterviewStats(statsParams);
+        return { success: true, data: stats };
+      }
+
       // Phase A: Proactive Status Analysis
       case "analyze_candidate_status": {
         const candidateId = await this.resolveReadableCandidateId(input);

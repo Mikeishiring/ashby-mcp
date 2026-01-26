@@ -20,6 +20,7 @@ import {
   AnalysisService,
   JobService,
   WriteService,
+  type InterviewStats,
 } from "./services/index.js";
 
 // Re-export types for convenience
@@ -351,6 +352,15 @@ export class AshbyService {
 
   getUpcomingInterviews(limit?: number): Promise<Interview[]> {
     return this.interviewService.getUpcomingInterviews(limit);
+  }
+
+  getInterviewStats(params: {
+    startDate: string;
+    endDate: string;
+    jobTitle?: string;
+    status?: string;
+  }): Promise<InterviewStats> {
+    return this.interviewService.getInterviewStats(params);
   }
 
   rescheduleInterview(

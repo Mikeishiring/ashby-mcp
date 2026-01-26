@@ -225,4 +225,130 @@ export class InterviewService {
   async listInterviewEvents(interviewScheduleId?: string): Promise<InterviewEvent[]> {
     return this.client.listInterviewEvents(interviewScheduleId);
   }
+
+  /**
+   * Get interview statistics for a date range, optionally filtered by job.
+   * Returns aggregated counts by job, stage, and candidate details.
+   */
+  async getInterviewStats(params: {
+    startDate: string;
+    endDate: string;
+    jobTitle?: string;
+    status?: string;
+  }): Promise<InterviewStats> {
+    // 1. Get all interviews in the date range
+    const interviews = await this.client.listInterviews({
+      startDate: params.startDate,
+      endDate: params.endDate,
+    });
+
+    // 2. Filter by status if not "All"
+    let filteredInterviews = interviews;
+    if (params.status && params.status !== "All") {
+      filteredInterviews = interviews.filter((i) => i.status === params.status);
+    }
+
+    // 3. Enrich with application and job data, then filter by job if specified
+    const enrichedInterviews: EnrichedInterview[] = [];
+    const applicationCache = new Map<string, { jobId: string; jobTitle: string; candidateId: string; candidateName: string }>();
+
+    for (const interview of filteredInterviews) {
+      let appData = applicationCache.get(interview.applicationId);
+
+      if (!appData) {
+        try {
+          const application = await this.client.getApplication(interview.applicationId);
+          const job = application.job ?? await this.client.getJob(application.jobId);
+          appData = {
+            jobId: application.jobId,
+            jobTitle: job?.title ?? "Unknown Position",
+            candidateId: application.candidateId,
+            candidateName: application.candidate?.name ?? "Unknown Candidate",
+          };
+          applicationCache.set(interview.applicationId, appData);
+        } catch {
+          appData = {
+            jobId: "unknown",
+            jobTitle: "Unknown Position",
+            candidateId: "unknown",
+            candidateName: "Unknown Candidate",
+          };
+        }
+      }
+
+      // Filter by job title if specified
+      if (params.jobTitle) {
+        const searchTerm = params.jobTitle.toLowerCase();
+        if (!appData.jobTitle.toLowerCase().includes(searchTerm)) {
+          continue;
+        }
+      }
+
+      enrichedInterviews.push({
+        ...interview,
+        jobTitle: appData.jobTitle,
+        candidateName: appData.candidateName,
+        stageName: interview.interviewStage?.title ?? "Unknown Stage",
+      });
+    }
+
+    // 4. Aggregate statistics
+    const byJob = new Map<string, number>();
+    const byStage = new Map<string, number>();
+    const byCandidate = new Map<string, { name: string; count: number }>();
+
+    for (const interview of enrichedInterviews) {
+      // Count by job
+      byJob.set(interview.jobTitle, (byJob.get(interview.jobTitle) ?? 0) + 1);
+
+      // Count by stage
+      byStage.set(interview.stageName, (byStage.get(interview.stageName) ?? 0) + 1);
+
+      // Count by candidate
+      const existing = byCandidate.get(interview.candidateName);
+      if (existing) {
+        existing.count++;
+      } else {
+        byCandidate.set(interview.candidateName, { name: interview.candidateName, count: 1 });
+      }
+    }
+
+    const result: InterviewStats = {
+      totalCount: enrichedInterviews.length,
+      dateRange: {
+        start: params.startDate,
+        end: params.endDate,
+      },
+      byJob: Object.fromEntries(byJob),
+      byStage: Object.fromEntries(byStage),
+      candidates: Array.from(byCandidate.values())
+        .sort((a, b) => b.count - a.count),
+    };
+
+    if (params.jobTitle) {
+      result.filter = { jobTitle: params.jobTitle };
+    }
+
+    return result;
+  }
+}
+
+interface EnrichedInterview extends Interview {
+  jobTitle: string;
+  candidateName: string;
+  stageName: string;
+}
+
+export interface InterviewStats {
+  totalCount: number;
+  dateRange: {
+    start: string;
+    end: string;
+  };
+  filter?: {
+    jobTitle: string;
+  };
+  byJob: Record<string, number>;
+  byStage: Record<string, number>;
+  candidates: Array<{ name: string; count: number }>;
 }

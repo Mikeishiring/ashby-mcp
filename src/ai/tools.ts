@@ -965,6 +965,34 @@ export const ashbyTools: Tool[] = [
     },
   },
   {
+    name: "get_interview_stats",
+    description:
+      "Get interview statistics and counts for a date range, optionally filtered by job. Use this for questions like 'how many interviews did we do last month' or 'DevOps interview count'. Returns total count, breakdown by job and stage, and candidate details.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        start_date: {
+          type: "string",
+          description: "Start date for the range (ISO format, e.g., 2025-12-01)",
+        },
+        end_date: {
+          type: "string",
+          description: "End date for the range (ISO format, e.g., 2025-12-31)",
+        },
+        job_title: {
+          type: "string",
+          description: "Optional: Filter by job title (partial match, e.g., 'DevOps', 'Engineer')",
+        },
+        status: {
+          type: "string",
+          enum: ["Scheduled", "Completed", "Cancelled", "All"],
+          description: "Filter by interview status (default: Completed)",
+        },
+      },
+      required: ["start_date", "end_date"],
+    },
+  },
+  {
     name: "reschedule_interview",
     description:
       "Reschedule an interview to a new time/date. This action requires confirmation.",
