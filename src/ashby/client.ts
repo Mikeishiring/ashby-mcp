@@ -465,6 +465,7 @@ export class AshbyClient {
 
     const stageMap = new Map<string, InterviewStage>();
 
+    // Try the direct stage list endpoint first
     try {
       const params = jobId ? { jobId } : {};
       const stages = await this.getAllPaginated<InterviewStage>("interviewStage.list", params);
@@ -474,15 +475,18 @@ export class AshbyClient {
         }
       }
     } catch (error) {
-      logger.warn("[Ashby] interviewStage.list failed, falling back to plans/applications.", { error: String(error) });
+      logger.warn("[Ashby] interviewStage.list failed.", { error: String(error) });
     }
 
+    // Try interview plans as secondary source
     try {
       const plans = await this.listInterviewPlans();
       for (const plan of plans) {
-        for (const stage of plan.interviewStages) {
-          if (stage?.id) {
-            stageMap.set(stage.id, stage);
+        if (plan.interviewStages) {
+          for (const stage of plan.interviewStages) {
+            if (stage?.id) {
+              stageMap.set(stage.id, stage);
+            }
           }
         }
       }
@@ -490,20 +494,15 @@ export class AshbyClient {
       logger.warn("[Ashby] interviewPlan.list failed while building stage cache.", { error: String(error) });
     }
 
-    try {
-      const filters = jobId ? { status: "Active", jobId } : { status: "Active" };
-      const applications = await this.getAllPaginated<Application>("application.list", filters);
-      for (const app of applications) {
-        if (app.currentInterviewStage?.id) {
-          stageMap.set(app.currentInterviewStage.id, app.currentInterviewStage);
-        }
-      }
-    } catch (error) {
-      logger.warn("[Ashby] application.list failed while building stage cache.", { error: String(error) });
-    }
+    // REMOVED: Fallback to fetching ALL applications was too expensive
+    // and could return massive payloads causing context overflow.
+    // If both endpoints above fail, we return what we have (possibly empty).
 
     const results = Array.from(stageMap.values());
-    this.setCache(cacheKey, results, AshbyClient.CACHE_TTL.stages);
+    // Only cache if we got some results
+    if (results.length > 0) {
+      this.setCache(cacheKey, results, AshbyClient.CACHE_TTL.stages);
+    }
     return results;
   }
 
