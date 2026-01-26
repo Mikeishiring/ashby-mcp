@@ -1280,12 +1280,17 @@ export class ToolExecutor {
     }
 
     if (input.job_title) {
-      const jobs = await this.ashby.getOpenJobs();
-      const normalizedTitle = input.job_title.toLowerCase();
-      const job = jobs.find((j) =>
-        j.title.toLowerCase().includes(normalizedTitle)
-      );
-      return job?.id ?? null;
+      try {
+        const jobs = await this.ashby.getOpenJobs();
+        const normalizedTitle = input.job_title.toLowerCase();
+        const job = jobs.find((j) =>
+          j.title.toLowerCase().includes(normalizedTitle)
+        );
+        return job?.id ?? null;
+      } catch (error) {
+        console.error("Failed to fetch jobs for title lookup:", error);
+        return null;
+      }
     }
 
     return null;

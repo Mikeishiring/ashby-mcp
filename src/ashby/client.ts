@@ -525,11 +525,11 @@ export class AshbyClient {
     const cached = this.getCached<InterviewPlan[]>(cacheKey);
     if (cached) return cached;
 
-    const results = await this.request<{ interviewPlans: InterviewPlan[] }>(
+    const results = await this.request<{ interviewPlans?: InterviewPlan[] }>(
       "interviewPlan.list",
       { includeArchived: false }
     );
-    const plans = results.interviewPlans;
+    const plans = results.interviewPlans ?? [];
     this.setCache(cacheKey, plans, AshbyClient.CACHE_TTL.stages);
     return plans;
   }

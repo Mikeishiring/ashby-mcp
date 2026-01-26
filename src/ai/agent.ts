@@ -19,6 +19,57 @@ import type { SafetyGuards } from "../safety/guards.js";
 import type { ApplicationWithContext } from "../types/index.js";
 
 /**
+ * Maximum characters for a tool result before truncation.
+ * ~4 chars per token, targeting max 50k tokens per result = 200k chars
+ * Being conservative with 100k to leave room for system prompt and conversation.
+ */
+const MAX_TOOL_RESULT_CHARS = 100000;
+
+/**
+ * Truncate a tool result if it's too large to prevent context overflow.
+ */
+function truncateToolResult(data: unknown): string {
+  const json = JSON.stringify(data);
+  if (json.length <= MAX_TOOL_RESULT_CHARS) {
+    return json;
+  }
+
+  // For arrays, try to truncate by removing items
+  if (Array.isArray(data)) {
+    const truncatedData = {
+      _truncated: true,
+      _originalCount: data.length,
+      _message: `Results truncated from ${data.length} items. Showing first items only.`,
+      items: data.slice(0, Math.min(20, data.length)),
+    };
+    return JSON.stringify(truncatedData);
+  }
+
+  // For objects with array properties, truncate the arrays
+  if (data && typeof data === "object") {
+    const truncated: Record<string, unknown> = { _truncated: true };
+    for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
+      if (Array.isArray(value) && value.length > 20) {
+        truncated[key] = {
+          _truncatedArray: true,
+          _originalCount: value.length,
+          items: value.slice(0, 20),
+        };
+      } else {
+        truncated[key] = value;
+      }
+    }
+    const truncatedJson = JSON.stringify(truncated);
+    if (truncatedJson.length <= MAX_TOOL_RESULT_CHARS) {
+      return truncatedJson;
+    }
+  }
+
+  // Last resort: hard truncate
+  return json.slice(0, MAX_TOOL_RESULT_CHARS) + '... [TRUNCATED - result too large]';
+}
+
+/**
  * Build the system prompt with dynamic configuration values
  */
 function buildSystemPrompt(batchLimit: number): string {
@@ -198,7 +249,7 @@ export class ClaudeAgent {
               toolResults.push({
                 type: "tool_result",
                 tool_use_id: toolUse.id,
-                content: JSON.stringify(result.data),
+                content: truncateToolResult(result.data),
               });
             } else {
               toolResults.push({
