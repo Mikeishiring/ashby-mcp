@@ -27,16 +27,75 @@ import type {
   JobStatus,
   CreateCandidateParams,
 } from "../types/index.js";
+import { logger } from "../utils/logger.js";
 
 interface CacheEntry<T> {
   data: T;
   expiresAt: number;
 }
 
+/**
+ * Rate limiter using token bucket algorithm
+ */
+class RateLimiter {
+  private tokens: number;
+  private lastRefill: number;
+  private readonly maxTokens: number;
+  private readonly refillRate: number; // tokens per second
+  private readonly minTokens: number;
+
+  constructor(maxTokens: number = 100, refillRate: number = 10) {
+    this.maxTokens = maxTokens;
+    this.tokens = maxTokens;
+    this.refillRate = refillRate;
+    this.lastRefill = Date.now();
+    this.minTokens = 1;
+  }
+
+  /**
+   * Attempt to acquire a token, returns delay in ms if rate limited
+   */
+  async acquire(): Promise<void> {
+    this.refill();
+
+    if (this.tokens >= this.minTokens) {
+      this.tokens -= 1;
+      return;
+    }
+
+    // Calculate wait time until a token is available
+    const waitMs = Math.ceil((this.minTokens - this.tokens) / this.refillRate * 1000);
+    logger.debug(`Rate limited, waiting ${waitMs}ms`, { tokens: this.tokens });
+    await new Promise(resolve => setTimeout(resolve, waitMs));
+
+    this.refill();
+    this.tokens -= 1;
+  }
+
+  /**
+   * Mark that we received a rate limit response
+   */
+  onRateLimitResponse(retryAfterMs?: number): void {
+    // Drain most tokens to slow down
+    this.tokens = Math.max(0, this.tokens - this.maxTokens * 0.5);
+    logger.warn("Rate limit response received", { retryAfterMs, remainingTokens: this.tokens });
+  }
+
+  private refill(): void {
+    const now = Date.now();
+    const elapsed = (now - this.lastRefill) / 1000;
+    const tokensToAdd = elapsed * this.refillRate;
+
+    this.tokens = Math.min(this.maxTokens, this.tokens + tokensToAdd);
+    this.lastRefill = now;
+  }
+}
+
 export class AshbyClient {
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private readonly cache: Map<string, CacheEntry<unknown>> = new Map();
+  private readonly rateLimiter: RateLimiter;
 
   // Cache TTLs in milliseconds
   private static readonly CACHE_TTL = {
@@ -46,12 +105,13 @@ export class AshbyClient {
   } as const;
 
   private static readonly REQUEST_TIMEOUT_MS = 15000;
-  private static readonly MAX_RETRIES = 2;
+  private static readonly MAX_RETRIES = 3; // Increased for rate limit handling
   private static readonly RETRY_BASE_DELAY_MS = 500;
 
   constructor(config: Config) {
     this.baseUrl = config.ashby.baseUrl;
     this.apiKey = config.ashby.apiKey;
+    this.rateLimiter = new RateLimiter(100, 10); // 100 tokens, refill 10/sec
   }
 
   // ===========================================================================
@@ -62,6 +122,9 @@ export class AshbyClient {
     endpoint: string,
     body?: Record<string, unknown>
   ): Promise<Response> {
+    // Acquire rate limit token before making request
+    await this.rateLimiter.acquire();
+
     const url = `${this.baseUrl}/${endpoint}`;
     const auth = Buffer.from(`${this.apiKey}:`).toString("base64");
     const isRead = this.isReadEndpoint(endpoint);
@@ -78,7 +141,7 @@ export class AshbyClient {
       fetchOptions.body = JSON.stringify(body);
     }
 
-    const maxRetries = isRead ? AshbyClient.MAX_RETRIES : 0;
+    const maxRetries = isRead ? AshbyClient.MAX_RETRIES : 1; // Allow 1 retry for writes on rate limit
 
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       const controller = new globalThis.AbortController();
@@ -90,6 +153,23 @@ export class AshbyClient {
 
         if (response.ok) {
           return response;
+        }
+
+        // Handle rate limiting specifically
+        if (response.status === 429) {
+          const retryAfter = response.headers.get("Retry-After");
+          const retryAfterMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : undefined;
+          this.rateLimiter.onRateLimitResponse(retryAfterMs);
+
+          if (attempt < maxRetries) {
+            const waitTime = retryAfterMs ?? this.calculateBackoff(attempt, 2000);
+            logger.warn(`Rate limited on ${endpoint}, waiting ${waitTime}ms before retry`, {
+              attempt,
+              retryAfterMs,
+            });
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+            continue;
+          }
         }
 
         if (this.shouldRetryStatus(response.status, isRead) && attempt < maxRetries) {
@@ -109,6 +189,13 @@ export class AshbyClient {
     }
 
     throw new Error("Request failed after retries");
+  }
+
+  private calculateBackoff(attempt: number, baseMs: number = AshbyClient.RETRY_BASE_DELAY_MS): number {
+    // Exponential backoff with jitter
+    const exponential = baseMs * Math.pow(2, attempt);
+    const jitter = Math.random() * 0.3 * exponential;
+    return Math.min(exponential + jitter, 30000); // Cap at 30s
   }
 
   private isReadEndpoint(endpoint: string): boolean {
@@ -137,14 +224,14 @@ export class AshbyClient {
     endpoint: string,
     body?: Record<string, unknown>
   ): Promise<T> {
-    console.log(`[Ashby] Requesting ${endpoint}...`);
+    logger.debug(`Requesting ${endpoint}`);
 
     try {
       const response = await this.postJson(endpoint, body);
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error(`[Ashby] API error ${response.status}: ${errorText}`);
+        logger.error(`API error ${response.status}`, { endpoint, status: response.status, error: errorText });
         throw new AshbyApiError(
           `Ashby API error: ${response.status} ${response.statusText}`,
           response.status,
@@ -156,17 +243,17 @@ export class AshbyClient {
 
       if (!data.success) {
         const errors = this.formatErrors(data.errors);
-        console.error(`[Ashby] API returned error: ${errors}`);
+        logger.error(`API returned error`, { endpoint, errors });
         throw new AshbyApiError(`Ashby API returned error: ${errors}`, 400);
       }
 
-      console.log(`[Ashby] ${endpoint} succeeded`);
+      logger.debug(`${endpoint} succeeded`);
       return data.results as T;
     } catch (error) {
       if (error instanceof AshbyApiError) {
         throw error;
       }
-      console.error(`[Ashby] Network error for ${endpoint}:`, error);
+      logger.error(`Network error for ${endpoint}`, { endpoint, error });
       throw error;
     }
   }
@@ -197,12 +284,12 @@ export class AshbyClient {
     endpoint: string,
     body?: Record<string, unknown>
   ): Promise<PaginatedResponse<T>> {
-    console.log(`[Ashby] Requesting ${endpoint}...`);
+    logger.debug(`Requesting paginated ${endpoint}`);
     const response = await this.postJson(endpoint, body);
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`[Ashby] API error ${response.status}: ${errorText}`);
+      logger.error(`API error ${response.status}`, { endpoint, status: response.status, error: errorText });
       throw new AshbyApiError(
         `Ashby API error: ${response.status} ${response.statusText}`,
         response.status,
@@ -222,11 +309,11 @@ export class AshbyClient {
 
     if (!data.success) {
       const errors = this.formatErrors(data.errors);
-      console.error(`[Ashby] API returned error: ${errors}`);
+      logger.error(`API returned error`, { endpoint, errors });
       throw new AshbyApiError(`Ashby API returned error: ${errors}`, 400);
     }
 
-    console.log(`[Ashby] ${endpoint} succeeded`);
+    logger.debug(`${endpoint} succeeded`, { resultCount: data.results.length });
     const result: PaginatedResponse<T> = {
       results: data.results,
       moreDataAvailable: data.moreDataAvailable,
@@ -387,7 +474,7 @@ export class AshbyClient {
         }
       }
     } catch (error) {
-      console.warn("[Ashby] interviewStage.list failed, falling back to plans/applications.", error);
+      logger.warn("[Ashby] interviewStage.list failed, falling back to plans/applications.", { error: String(error) });
     }
 
     try {
@@ -400,7 +487,7 @@ export class AshbyClient {
         }
       }
     } catch (error) {
-      console.warn("[Ashby] interviewPlan.list failed while building stage cache.", error);
+      logger.warn("[Ashby] interviewPlan.list failed while building stage cache.", { error: String(error) });
     }
 
     try {
@@ -412,7 +499,7 @@ export class AshbyClient {
         }
       }
     } catch (error) {
-      console.warn("[Ashby] application.list failed while building stage cache.", error);
+      logger.warn("[Ashby] application.list failed while building stage cache.", { error: String(error) });
     }
 
     const results = Array.from(stageMap.values());
@@ -587,7 +674,7 @@ export class AshbyClient {
     // Log any failures for debugging but don't crash
     const failures = results.filter((r) => r.status === "rejected");
     if (failures.length > 0) {
-      console.warn(`[Ashby] Failed to fetch ${failures.length} application(s) for candidate ${candidateId}`);
+      logger.warn(`[Ashby] Failed to fetch ${failures.length} application(s) for candidate ${candidateId}`);
     }
 
     return { candidate, applications };
@@ -701,7 +788,7 @@ export class AshbyClient {
     authorId?: string;
   }): Promise<FeedbackSubmission[] | null> {
     if (!filters) {
-      console.warn("[Ashby] feedbackSubmission.list unavailable; no filters provided for fallback.");
+      logger.warn("[Ashby] feedbackSubmission.list unavailable; no filters provided for fallback.");
       return [];
     }
 
@@ -711,13 +798,13 @@ export class AshbyClient {
         const interview = await this.getInterview(filters.interviewId);
         applicationId = interview.applicationId;
       } catch (error) {
-        console.warn("[Ashby] Failed to resolve applicationId for interviewId fallback.", error);
+        logger.warn("[Ashby] Failed to resolve applicationId for interviewId fallback.", { error: String(error) });
         return [];
       }
     }
 
     if (!applicationId) {
-      console.warn("[Ashby] feedbackSubmission.list unavailable; missing applicationId for fallback.");
+      logger.warn("[Ashby] feedbackSubmission.list unavailable; missing applicationId for fallback.");
       return [];
     }
 
@@ -735,7 +822,7 @@ export class AshbyClient {
       }
       return submissions;
     } catch (error) {
-      console.warn("[Ashby] applicationFeedback.list fallback failed.", error);
+      logger.warn("[Ashby] applicationFeedback.list fallback failed.", { error: String(error) });
       return [];
     }
   }

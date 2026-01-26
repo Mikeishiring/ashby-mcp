@@ -9,11 +9,32 @@ export * from "./ashby.js";
 // =============================================================================
 
 /**
+ * All write operation types that can be confirmed
+ */
+export type ConfirmableOperationType =
+  | "move_stage"
+  | "add_note"
+  | "batch_move"
+  | "schedule_interview"
+  | "reschedule_interview"
+  | "cancel_interview"
+  | "create_candidate"
+  | "apply_to_job"
+  | "transfer_application"
+  | "reject_candidate"
+  | "add_candidate_tag"
+  | "create_offer"
+  | "update_offer"
+  | "approve_offer"
+  | "send_offer"
+  | "set_reminder";
+
+/**
  * Pending confirmation for write operations
  */
 export interface PendingConfirmation {
   id: string;
-  type: "move_stage" | "add_note" | "batch_move";
+  type: ConfirmableOperationType;
   description: string;
   candidateIds: string[];
   payload: unknown;

@@ -10,7 +10,10 @@ import type { ClaudeAgent, PendingWriteOperation, TriageSessionData } from "../a
 import type { ConfirmationManager } from "../safety/confirmations.js";
 import type { ReminderManager } from "../reminders/index.js";
 import type { TriageSessionManager } from "../triage/index.js";
-import type { MessageContext } from "../types/index.js";
+import type { MessageContext, ConfirmableOperationType } from "../types/index.js";
+import { getSlackErrorMessage } from "../utils/errors.js";
+import type { WorkflowManager, WorkflowSession } from "../workflows/index.js";
+import type { AshbyService } from "../ashby/index.js";
 
 export class SlackBot {
   private readonly app: App;
@@ -18,13 +21,17 @@ export class SlackBot {
   private readonly confirmations: ConfirmationManager;
   private readonly triageSessions: TriageSessionManager;
   private readonly reminders: ReminderManager | undefined;
+  private readonly workflows: WorkflowManager | undefined;
+  private readonly ashby: AshbyService | undefined;
 
   constructor(
     config: Config,
     agent: ClaudeAgent,
     confirmations: ConfirmationManager,
     reminders?: ReminderManager,
-    triageSessions?: TriageSessionManager
+    triageSessions?: TriageSessionManager,
+    workflows?: WorkflowManager,
+    ashby?: AshbyService
   ) {
     this.app = new App({
       token: config.slack.botToken,
@@ -37,6 +44,8 @@ export class SlackBot {
     this.confirmations = confirmations;
     this.reminders = reminders;
     this.triageSessions = triageSessions!;
+    this.workflows = workflows;
+    this.ashby = ashby;
 
     this.setupEventHandlers();
   }
@@ -95,9 +104,22 @@ export class SlackBot {
       await this.handleMessage(context, say as (message: string | object) => Promise<unknown>);
     });
 
-    // Handle reaction additions (for confirmations and triage)
+    // Handle reaction additions (for confirmations, triage, and workflows)
     this.app.event("reaction_added", async ({ event }) => {
-      // Check for triage reactions first
+      // Check for workflow reactions first
+      if (this.workflows) {
+        const workflowSession = this.workflows.findByMessage(
+          event.item.channel,
+          event.item.ts
+        );
+
+        if (workflowSession) {
+          await this.handleWorkflowReaction(workflowSession, event.reaction, event.user);
+          return;
+        }
+      }
+
+      // Check for triage reactions
       if (this.triageSessions) {
         const triageSession = this.triageSessions.findByMessage(
           event.item.channel,
@@ -208,8 +230,11 @@ export class SlackBot {
       // Remove typing indicator on error
       await this.removeReactionSafe(context.channelId, context.messageTs, "eyes");
 
+      // Get a user-friendly error message based on the error type
+      const userMessage = getSlackErrorMessage(error);
+
       await say({
-        text: "Sorry, I encountered an error processing your request. Please try again.",
+        text: userMessage,
         thread_ts: context.threadTs,
       });
     }
@@ -226,7 +251,7 @@ export class SlackBot {
     for (const op of operations) {
       const description = this.formatConfirmationDescription(op);
       this.confirmations.create({
-        type: op.toolName === "add_note" ? "add_note" : "move_stage",
+        type: this.mapToolNameToConfirmationType(op.toolName),
         description,
         candidateIds: op.candidateId ? [op.candidateId] : [],
         payload: op,
@@ -398,6 +423,30 @@ export class SlackBot {
     }
   }
 
+  /**
+   * Map tool names to confirmable operation types
+   */
+  private mapToolNameToConfirmationType(toolName: string): ConfirmableOperationType {
+    const mapping: Record<string, ConfirmableOperationType> = {
+      move_candidate_stage: "move_stage",
+      add_note: "add_note",
+      schedule_interview: "schedule_interview",
+      reschedule_interview: "reschedule_interview",
+      cancel_interview: "cancel_interview",
+      create_candidate: "create_candidate",
+      apply_to_job: "apply_to_job",
+      transfer_application: "transfer_application",
+      reject_candidate: "reject_candidate",
+      add_candidate_tag: "add_candidate_tag",
+      create_offer: "create_offer",
+      update_offer: "update_offer",
+      approve_offer: "approve_offer",
+      send_offer: "send_offer",
+      set_reminder: "set_reminder",
+    };
+    return mapping[toolName] ?? "move_stage";
+  }
+
   private formatConfirmationDescription(op: PendingWriteOperation): string {
     const input = op.input as {
       name_or_email?: string;
@@ -407,7 +456,19 @@ export class SlackBot {
       email?: string;
       offer_id?: string;
       interview_schedule_id?: string;
+      target_stage?: string;
+      content?: string;
+      job_title?: string;
+      job_id?: string;
+      tag_id?: string;
+      start_time?: string;
+      remind_in?: string;
+      note?: string;
+      salary?: number;
+      start_date?: string;
     };
+
+    // Get candidate identifier
     const candidateLabel =
       input?.name_or_email ??
       input?.candidate_email ??
@@ -415,16 +476,118 @@ export class SlackBot {
       input?.email ??
       input?.name ??
       op.candidateId;
-    if (candidateLabel) {
-      return `${op.toolName} for ${candidateLabel}`;
+
+    // Build human-readable descriptions for each operation type
+    switch (op.toolName) {
+      case "move_candidate_stage":
+        if (candidateLabel && input?.target_stage) {
+          return `Move *${candidateLabel}* to *${input.target_stage}*`;
+        }
+        if (candidateLabel) {
+          return `Move *${candidateLabel}* to a new stage`;
+        }
+        return "Move candidate to a new stage";
+
+      case "add_note":
+        if (candidateLabel) {
+          const preview = input?.content?.substring(0, 50) ?? "";
+          return `Add note to *${candidateLabel}*${preview ? `: "${preview}..."` : ""}`;
+        }
+        return "Add note to candidate";
+
+      case "schedule_interview":
+        if (candidateLabel && input?.start_time) {
+          return `Schedule interview for *${candidateLabel}* at ${input.start_time}`;
+        }
+        if (candidateLabel) {
+          return `Schedule interview for *${candidateLabel}*`;
+        }
+        return "Schedule interview";
+
+      case "reschedule_interview":
+        if (input?.interview_schedule_id && input?.start_time) {
+          return `Reschedule interview to ${input.start_time}`;
+        }
+        return "Reschedule interview";
+
+      case "cancel_interview":
+        return input?.interview_schedule_id
+          ? `Cancel interview (schedule: ${input.interview_schedule_id.substring(0, 8)}...)`
+          : "Cancel interview";
+
+      case "reject_candidate":
+        return candidateLabel
+          ? `Archive/reject *${candidateLabel}*`
+          : "Archive/reject candidate";
+
+      case "create_candidate":
+        if (input?.name && input?.email) {
+          return `Create new candidate: *${input.name}* (${input.email})`;
+        }
+        return "Create new candidate";
+
+      case "apply_to_job":
+        if (candidateLabel && input?.job_title) {
+          return `Apply *${candidateLabel}* to *${input.job_title}*`;
+        }
+        if (candidateLabel) {
+          return `Apply *${candidateLabel}* to job`;
+        }
+        return "Apply candidate to job";
+
+      case "transfer_application":
+        if (candidateLabel && input?.job_title) {
+          return `Transfer *${candidateLabel}* to *${input.job_title}*`;
+        }
+        return "Transfer application to new job";
+
+      case "add_candidate_tag":
+        return candidateLabel
+          ? `Add tag to *${candidateLabel}*`
+          : "Add tag to candidate";
+
+      case "create_offer":
+        if (candidateLabel && input?.salary) {
+          return `Create offer for *${candidateLabel}* ($${input.salary.toLocaleString()})`;
+        }
+        if (candidateLabel) {
+          return `Create offer for *${candidateLabel}*`;
+        }
+        return "Create offer";
+
+      case "update_offer":
+        return input?.offer_id
+          ? `Update offer ${input.offer_id.substring(0, 8)}...`
+          : "Update offer";
+
+      case "approve_offer":
+        return input?.offer_id
+          ? `Approve offer ${input.offer_id.substring(0, 8)}...`
+          : "Approve offer";
+
+      case "send_offer":
+        return input?.offer_id
+          ? `Send offer ${input.offer_id.substring(0, 8)}... to candidate`
+          : "Send offer to candidate";
+
+      case "set_reminder":
+        if (candidateLabel && input?.remind_in) {
+          const notePreview = input?.note ? `: "${input.note.substring(0, 30)}..."` : "";
+          return `Set reminder for *${candidateLabel}* in ${input.remind_in}${notePreview}`;
+        }
+        if (candidateLabel) {
+          return `Set reminder for *${candidateLabel}*`;
+        }
+        return "Set reminder";
+
+      default:
+        // Fallback: format tool name nicely
+        const readableName = op.toolName.replace(/_/g, " ");
+        if (candidateLabel) {
+          return `${readableName} for *${candidateLabel}*`;
+        }
+        return readableName;
     }
-    if (input?.offer_id) {
-      return `${op.toolName} for offer ${input.offer_id}`;
-    }
-    if (input?.interview_schedule_id) {
-      return `${op.toolName} for interview schedule ${input.interview_schedule_id}`;
-    }
-    return op.toolName;
   }
 
   private async startTriageSession(
@@ -459,12 +622,21 @@ export class SlackBot {
     });
 
     if (message.ts) {
-      this.triageSessions.create({
+      const { replacedSession } = this.triageSessions.create({
         userId: context.userId,
         channelId: context.channelId,
         messageTs: message.ts,
         candidates: triage.candidates,
       });
+
+      // Warn user if we replaced an existing session with unfinished decisions
+      if (replacedSession && replacedSession.decisions.length > 0) {
+        await this.app.client.chat.postMessage({
+          channel: context.channelId,
+          thread_ts: responseTs,
+          text: `⚠️ _Note: Your previous triage session had ${replacedSession.decisions.length} decision(s) that weren't applied. Starting fresh with this new batch._`,
+        });
+      }
 
       await Promise.all([
         this.addReactionSafe(context.channelId, message.ts, "white_check_mark"),
@@ -504,5 +676,161 @@ export class SlackBot {
     } catch (error) {
       console.warn("Failed to remove reaction:", error);
     }
+  }
+
+  /**
+   * Handle a workflow reaction
+   */
+  private async handleWorkflowReaction(
+    session: WorkflowSession,
+    reaction: string,
+    userId: string
+  ): Promise<void> {
+    if (!this.workflows) return;
+
+    const result = await this.workflows.handleReaction(session, reaction, userId);
+
+    if (!result.handled) return;
+
+    // Execute API action if present
+    if (result.apiAction && this.ashby) {
+      try {
+        await this.executeWorkflowApiAction(result.apiAction);
+      } catch (error) {
+        console.error("[Workflow] API action failed:", error);
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        await this.app.client.chat.postMessage({
+          channel: session.channelId,
+          thread_ts: session.messageTs,
+          text: `❌ Action failed: ${errorMessage}`,
+        });
+        return;
+      }
+    }
+
+    // Post the response message
+    if (result.message) {
+      const message = await this.app.client.chat.postMessage({
+        channel: session.channelId,
+        thread_ts: session.messageTs,
+        text: result.message,
+      });
+
+      // If there's a follow-up with reactions, add them
+      if (result.followUp?.reactions && message.ts) {
+        // Update session to track the new message
+        this.workflows.updateMessageTs(session.id, message.ts);
+
+        for (const reactionName of result.followUp.reactions) {
+          await this.addReactionSafe(session.channelId, message.ts, reactionName);
+        }
+      }
+    }
+
+    // Complete the workflow if done
+    if (result.completed) {
+      this.workflows.complete(session.id);
+    }
+  }
+
+  /**
+   * Execute an API action from a workflow reaction
+   */
+  private async executeWorkflowApiAction(action: {
+    type: string;
+    params: Record<string, unknown>;
+  }): Promise<void> {
+    if (!this.ashby) {
+      throw new Error("Ashby service not available");
+    }
+
+    switch (action.type) {
+      case "approve_offer": {
+        const { offerId, approverId } = action.params as {
+          offerId: string;
+          approverId: string;
+        };
+        await this.ashby.approveOffer(offerId, approverId);
+        break;
+      }
+
+      case "send_offer": {
+        const { offerId } = action.params as { offerId: string };
+        await this.ashby.sendOffer(offerId);
+        break;
+      }
+
+      case "archive_candidate": {
+        const { candidateId, archiveReasonId, applicationId } = action.params as {
+          candidateId: string;
+          archiveReasonId: string;
+          applicationId?: string;
+        };
+        await this.ashby.rejectCandidate(candidateId, archiveReasonId, applicationId);
+        break;
+      }
+
+      case "submit_feedback": {
+        // Note: Feedback submission may require scorecard form creation
+        // which is complex - log for now, could implement later
+        console.log("[Workflow] Feedback submission requested:", action.params);
+        break;
+      }
+
+      case "reschedule_interview": {
+        const { interviewScheduleId, newStartTime, newEndTime, interviewerIds } =
+          action.params as {
+            interviewScheduleId: string;
+            newStartTime: string;
+            newEndTime: string;
+            interviewerIds: string[];
+          };
+        await this.ashby.rescheduleInterview(
+          interviewScheduleId,
+          newStartTime,
+          newEndTime,
+          interviewerIds
+        );
+        break;
+      }
+
+      default:
+        console.warn(`[Workflow] Unknown API action type: ${action.type}`);
+    }
+  }
+
+  /**
+   * Get the workflow manager (for external workflow triggers)
+   */
+  getWorkflowManager(): WorkflowManager | undefined {
+    return this.workflows;
+  }
+
+  /**
+   * Post a workflow message and set up reactions
+   */
+  async postWorkflowMessage(params: {
+    channelId: string;
+    threadTs?: string;
+    text: string;
+    reactions: string[];
+  }): Promise<string | undefined> {
+    const messageArgs: { channel: string; text: string; thread_ts?: string } = {
+      channel: params.channelId,
+      text: params.text,
+    };
+    if (params.threadTs !== undefined) {
+      messageArgs.thread_ts = params.threadTs;
+    }
+    const message = await this.app.client.chat.postMessage(messageArgs);
+
+    if (message.ts) {
+      for (const reaction of params.reactions) {
+        await this.addReactionSafe(params.channelId, message.ts, reaction);
+      }
+      return message.ts;
+    }
+
+    return undefined;
   }
 }

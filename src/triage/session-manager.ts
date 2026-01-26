@@ -25,7 +25,28 @@ export class TriageSessionManager {
   }
 
   /**
+   * Check if a user has an active session with unfinished work
+   */
+  hasActiveSession(userId: string): { active: boolean; session?: TriageSession; decisionsCount?: number } {
+    const session = this.sessions.get(userId);
+    if (!session) return { active: false };
+
+    // Check if expired
+    if (new Date() > session.expiresAt) {
+      this.sessions.delete(userId);
+      return { active: false };
+    }
+
+    return {
+      active: true,
+      session,
+      decisionsCount: session.decisions.length,
+    };
+  }
+
+  /**
    * Create a new triage session
+   * Returns the previous session if one was replaced (caller should warn user)
    */
   create(params: {
     userId: string;
@@ -34,9 +55,18 @@ export class TriageSessionManager {
     candidates: ApplicationWithContext[];
     targetStageId?: string;
     archiveReasonId?: string;
-  }): TriageSession {
+  }): { session: TriageSession; replacedSession?: TriageSession } {
+    // Check for existing session and preserve it for warning
+    const existingSession = this.sessions.get(params.userId);
+    const replacedSession = existingSession && new Date() <= existingSession.expiresAt
+      ? existingSession
+      : undefined;
+
     // End any existing session for this user
-    this.endSession(params.userId);
+    if (existingSession) {
+      this.sessions.delete(params.userId);
+      console.log(`[Triage] Replaced existing session for user ${params.userId} (had ${existingSession.decisions.length} decisions)`);
+    }
 
     const session: TriageSession = {
       id: `triage-${params.userId}-${Date.now()}`,
@@ -55,7 +85,7 @@ export class TriageSessionManager {
     this.sessions.set(params.userId, session);
     console.log(`[Triage] Session created for user ${params.userId} with ${params.candidates.length} candidates`);
 
-    return session;
+    return replacedSession ? { session, replacedSession } : { session };
   }
 
   /**
@@ -237,7 +267,7 @@ export class TriageSessionManager {
     }
 
     lines.push("");
-    lines.push("React: ✅ = Mark advance | ❌ = Mark reject | 🤔 = Skip (no changes applied)");
+    lines.push("_React: ✅ advance | ❌ reject | 🤔 skip (review only—no changes until you confirm)_");
 
     return lines.join("\n");
   }
@@ -248,20 +278,35 @@ export class TriageSessionManager {
   formatSummary(session: TriageSession): string {
     const lines: string[] = [];
 
-    const advanced = session.decisions.filter((d) => d.decision === "advance").length;
-    const rejected = session.decisions.filter((d) => d.decision === "reject").length;
+    const advanceDecisions = session.decisions.filter((d) => d.decision === "advance");
+    const rejectDecisions = session.decisions.filter((d) => d.decision === "reject");
     const skipped = session.decisions.filter((d) => d.decision === "skip").length;
 
-    lines.push("✅ *Triage Complete!*");
+    lines.push("✅ *Triage Review Complete!*");
     lines.push("");
-    lines.push(`📊 *Results:*`);
-    lines.push(`  • ✅ Advanced: ${advanced}`);
-    lines.push(`  • ❌ Rejected: ${rejected}`);
+    lines.push(`📊 *Your decisions:*`);
+    lines.push(`  • ✅ Ready to advance: ${advanceDecisions.length}`);
+    lines.push(`  • ❌ Ready to reject: ${rejectDecisions.length}`);
     lines.push(`  • 🤔 Skipped: ${skipped}`);
     lines.push("");
 
-    if (advanced > 0 || rejected > 0) {
-      lines.push("_Decisions recorded. No changes applied. Use explicit commands to update Ashby._");
+    // Make it clear this is review mode and explain what happens next
+    if (advanceDecisions.length > 0 || rejectDecisions.length > 0) {
+      lines.push("*What's next?*");
+      lines.push("This was a quick review—no changes have been made to Ashby yet.");
+      lines.push("");
+
+      if (advanceDecisions.length > 0) {
+        lines.push(`To move the ${advanceDecisions.length} candidate(s) you marked ✅, tell me which stage to advance them to.`);
+      }
+      if (rejectDecisions.length > 0) {
+        lines.push(`To reject the ${rejectDecisions.length} candidate(s) you marked ❌, just say "reject them" and I'll confirm before proceeding.`);
+      }
+
+      lines.push("");
+      lines.push("_Or just ask me about specific candidates to take action one at a time._");
+    } else {
+      lines.push("_No candidates were marked for action. Need to triage more candidates?_");
     }
 
     return lines.join("\n");

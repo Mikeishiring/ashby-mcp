@@ -58,10 +58,13 @@ export class SafetyGuards {
       };
     }
 
-    // BATCH_LIMIT mode - allow without confirmation if under limit
+    // BATCH_LIMIT mode - destructive operations still require confirmation
+    const destructiveOps = ["move_stage", "batch_move"];
+    const isDestructive = destructiveOps.includes(params.type);
+
     return {
       allowed: true,
-      requiresConfirmation: false,
+      requiresConfirmation: isDestructive,
     };
   }
 

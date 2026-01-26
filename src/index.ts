@@ -15,6 +15,7 @@ import { SlackBot } from "./slack/index.js";
 import { DailySummaryScheduler, PipelineAlertScheduler } from "./scheduler/index.js";
 import { ReminderManager } from "./reminders/index.js";
 import { TriageSessionManager } from "./triage/index.js";
+import { WorkflowManager } from "./workflows/index.js";
 
 async function main(): Promise<void> {
   console.log("Starting Ashby Slack Bot...");
@@ -33,10 +34,13 @@ async function main(): Promise<void> {
   const ashby = new AshbyService(config);
   console.log("Ashby service initialized");
 
-  // Log API key presence (not the actual key for security)
-  const ashbyKeyLength = config.ashby.apiKey.length;
-  const ashbyKeyPrefix = config.ashby.apiKey.substring(0, 8);
-  console.log(`Ashby API key: ${ashbyKeyPrefix}... (${ashbyKeyLength} chars)`);
+  // Verify API key is configured (never log key contents)
+  if (config.ashby.apiKey) {
+    console.log("✅ Ashby API key configured");
+  } else {
+    console.error("❌ Ashby API key missing");
+    process.exit(1);
+  }
 
   // Test Ashby connectivity on startup
   try {
@@ -65,8 +69,12 @@ async function main(): Promise<void> {
   const triageSessions = new TriageSessionManager();
   console.log("Triage session manager initialized");
 
-  // Initialize Slack bot (pass reminders and triage managers)
-  const bot = new SlackBot(config, agent, confirmations, reminders, triageSessions);
+  // Initialize workflow manager
+  const workflows = new WorkflowManager();
+  console.log("Workflow manager initialized");
+
+  // Initialize Slack bot (pass reminders, triage, workflow managers, and ashby service)
+  const bot = new SlackBot(config, agent, confirmations, reminders, triageSessions, workflows, ashby);
 
   // Initialize schedulers
   const dailySummaryScheduler = new DailySummaryScheduler(config, ashby);
@@ -78,6 +86,7 @@ async function main(): Promise<void> {
     dailySummaryScheduler.stop();
     pipelineAlertScheduler.stop();
     triageSessions.shutdown();
+    workflows.shutdown();
     await bot.stop();
     process.exit(0);
   };

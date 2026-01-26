@@ -1,407 +1,299 @@
 /**
- * Ashby Service Layer
+ * Ashby Service Layer (Facade)
  *
- * Provides high-level operations built on top of the Ashby client.
- * Handles business logic like stale candidate detection and pipeline summaries.
+ * Provides a unified interface to all domain services.
+ * This is the main entry point for the AI agent to interact with Ashby.
  */
 
-import { AshbyApiError, AshbyClient } from "./client.js";
+import { AshbyClient } from "./client.js";
 import type { Config } from "../config/index.js";
+
+// Import domain services
+import {
+  SearchService,
+  PipelineService,
+  InterviewService,
+  OfferService,
+  FeedbackService,
+  CandidateService,
+  AnalyticsService,
+  AnalysisService,
+  JobService,
+  WriteService,
+} from "./services/index.js";
+
+// Re-export types for convenience
 import type {
   Application,
-  Candidate,
-  Job,
-  InterviewPlan,
-  InterviewStage,
-  InterviewEvent,
-  Note,
   ApplicationWithContext,
-  PipelineSummary,
-  DailySummaryData,
-  Scorecard,
-  SourceAnalytics,
-  PrepPacket,
-  CandidateComparison,
   ArchiveReason,
-  CandidateWithContext,
+  BatchBlockerAnalysis,
+  Candidate,
+  CandidateComparison,
+  CandidateStatusAnalysis,
+  CreateCandidateParams,
+  DailySummaryData,
+  FeedbackSubmission,
+  Interview,
+  InterviewEvent,
+  InterviewPlan,
+  InterviewSchedule,
+  InterviewStage,
+  Job,
+  Note,
   Offer,
   OfferStatus,
-  Interview,
-  InterviewSchedule,
+  PipelineSummary,
+  PrepPacket,
+  Scorecard,
+  SourceAnalytics,
   User,
-  CreateCandidateParams,
-  CandidateStatusAnalysis,
-  BatchBlockerAnalysis,
-  CandidateBlocker,
-  BlockerType,
-  BlockerSeverity,
-  CandidatePriority,
-  RecentActivity,
-  FeedbackSubmission,
-  FieldSubmission,
 } from "../types/index.js";
 
 export class AshbyService {
+  // Domain services
+  private readonly searchService: SearchService;
+  private readonly pipelineService: PipelineService;
+  private readonly interviewService: InterviewService;
+  private readonly offerService: OfferService;
+  private readonly feedbackService: FeedbackService;
+  private readonly candidateService: CandidateService;
+  private readonly analyticsService: AnalyticsService;
+  private readonly analysisService: AnalysisService;
+  private readonly jobService: JobService;
+  private readonly writeService: WriteService;
+
   private readonly client: AshbyClient;
-  private readonly staleDays: number;
-  private readonly feedbackSubmissionCache: Map<string, FeedbackSubmission>;
 
   constructor(config: Config) {
     this.client = new AshbyClient(config);
-    this.staleDays = config.staleDays;
-    this.feedbackSubmissionCache = new Map();
-  }
 
-  // ===========================================================================
-  // Search & Discovery
-  // ===========================================================================
-
-  async searchCandidates(query: string): Promise<Candidate[]> {
-    return this.client.searchCandidates(query);
-  }
-
-  async getCandidateWithApplications(candidateId: string): Promise<{
-    candidate: Candidate;
-    applications: Application[];
-  }> {
-    return this.client.getCandidateWithApplications(candidateId);
-  }
-
-  async getApplication(applicationId: string): Promise<Application> {
-    return this.client.getApplication(applicationId);
-  }
-
-  async findCandidateByNameOrEmail(
-    query: string
-  ): Promise<Candidate | null> {
-    const results = await this.client.searchCandidates(query);
-    if (results.length === 0) {
-      return null;
-    }
-
-    const normalizedQuery = query.trim().toLowerCase();
-    const isEmailQuery = normalizedQuery.includes("@");
-
-    if (isEmailQuery) {
-      const exactMatches = results.filter(
-        (candidate) => candidate.primaryEmailAddress?.value?.toLowerCase() === normalizedQuery
-      );
-      if (exactMatches.length === 1) {
-        return exactMatches[0]!;
-      }
-      if (exactMatches.length > 1) {
-        throw new Error(
-          `Multiple candidates found for ${query}. Please provide candidate_id instead.`
-        );
-      }
-    }
-
-    if (results.length === 1) {
-      return results[0]!;
-    }
-
-    throw new Error(
-      `Multiple candidates matched "${query}". Please provide candidate_id or a more specific email.`
+    // Initialize domain services
+    this.searchService = new SearchService(this.client);
+    this.pipelineService = new PipelineService(this.client, config.staleDays);
+    this.candidateService = new CandidateService(this.client);
+    this.feedbackService = new FeedbackService(this.client, this.searchService);
+    this.interviewService = new InterviewService(this.client, this.searchService);
+    this.offerService = new OfferService(this.client, this.searchService);
+    this.jobService = new JobService(this.client, this.pipelineService);
+    this.writeService = new WriteService(this.client, this.searchService);
+    this.analyticsService = new AnalyticsService(
+      this.client,
+      this.searchService,
+      this.candidateService,
+      this.feedbackService,
+      this.interviewService
+    );
+    this.analysisService = new AnalysisService(
+      this.client,
+      this.searchService,
+      this.pipelineService,
+      config.staleDays
     );
   }
 
-  async getActiveApplicationForCandidate(
+  // ===========================================================================
+  // Search & Discovery (delegated to SearchService)
+  // ===========================================================================
+
+  searchCandidates(query: string): Promise<Candidate[]> {
+    return this.searchService.searchCandidates(query);
+  }
+
+  getCandidateWithApplications(candidateId: string): Promise<{
+    candidate: Candidate;
+    applications: Application[];
+  }> {
+    return this.searchService.getCandidateWithApplications(candidateId);
+  }
+
+  getApplication(applicationId: string): Promise<Application> {
+    return this.searchService.getApplication(applicationId);
+  }
+
+  findCandidateByNameOrEmail(query: string): Promise<Candidate | null> {
+    return this.searchService.findCandidateByNameOrEmail(query);
+  }
+
+  getActiveApplicationForCandidate(
     candidateId: string,
     applicationId?: string
   ): Promise<Application | null> {
-    const { applications } = await this.client.getCandidateWithApplications(candidateId);
-    return this.selectActiveApplication(applications, applicationId);
+    return this.searchService.getActiveApplicationForCandidate(candidateId, applicationId);
   }
 
   // ===========================================================================
-  // Candidate Details
+  // Candidate Details (delegated to CandidateService)
   // ===========================================================================
 
-  async getCandidateFullContext(candidateId: string): Promise<{
+  getCandidateFullContext(candidateId: string): Promise<{
     candidate: Candidate;
     applications: ApplicationWithContext[];
     notes: Note[];
   }> {
-    // Use Promise.allSettled for resilience - partial data is better than no data
-    const [candidateResult, notesResult, stagesResult, jobsResult] = await Promise.allSettled([
-      this.client.getCandidateWithApplications(candidateId),
-      this.client.getCandidateNotes(candidateId),
-      this.client.listInterviewStages(),
-      this.client.listJobs(),
-    ]);
+    return this.candidateService.getCandidateFullContext(candidateId);
+  }
 
-    // Candidate data is required - throw if it fails
-    if (candidateResult.status === "rejected") {
-      throw candidateResult.reason;
-    }
-    const { candidate, applications } = candidateResult.value;
+  createCandidate(params: CreateCandidateParams): Promise<Candidate> {
+    return this.candidateService.createCandidate(params);
+  }
 
-    // Notes, stages, and jobs are optional - use empty arrays on failure
-    const notes = notesResult.status === "fulfilled" ? notesResult.value : [];
-    const stages = stagesResult.status === "fulfilled" ? stagesResult.value : [];
-    const jobs = jobsResult.status === "fulfilled" ? jobsResult.value : [];
+  updateCandidate(
+    candidateId: string,
+    updates: Partial<CreateCandidateParams>
+  ): Promise<Candidate> {
+    return this.candidateService.updateCandidate(candidateId, updates);
+  }
 
-    const stageMap = new Map(stages.map((s) => [s.id, s]));
-    const jobMap = new Map(jobs.map((j) => [j.id, j]));
+  addCandidateTag(candidateId: string, tagId: string): Promise<Candidate> {
+    return this.candidateService.addCandidateTag(candidateId, tagId);
+  }
 
-    const applicationsWithContext = applications.map((app) =>
-      this.enrichApplication(app, stageMap, jobMap)
-    );
+  listCandidateTags(): Promise<Array<{ id: string; title: string }>> {
+    return this.candidateService.listCandidateTags();
+  }
 
-    return {
-      candidate,
-      applications: applicationsWithContext,
-      notes,
-    };
+  isHiredCandidate(candidateId: string): Promise<boolean> {
+    return this.candidateService.isHiredCandidate(candidateId);
   }
 
   // ===========================================================================
-  // Pipeline Operations
+  // Pipeline Operations (delegated to PipelineService)
   // ===========================================================================
 
-  async getPipelineSummary(): Promise<PipelineSummary> {
-    const [applications, stages, jobs] = await Promise.all([
-      this.client.listApplications({ status: "Active" }),
-      this.client.listInterviewStages(),
-      this.client.getOpenJobs(),
-    ]);
-
-    const stageMap = new Map(stages.map((s) => [s.id, s]));
-    const jobMap = new Map(jobs.map((j) => [j.id, j]));
-
-    const enrichedApps = applications.map((app) =>
-      this.enrichApplication(app, stageMap, jobMap)
-    );
-
-    // Group by stage
-    const byStage = new Map<string, ApplicationWithContext[]>();
-    for (const app of enrichedApps) {
-      if (!app.currentInterviewStage) continue;
-      const stageId = app.currentInterviewStage.id;
-      if (!byStage.has(stageId)) {
-        byStage.set(stageId, []);
-      }
-      byStage.get(stageId)!.push(app);
-    }
-
-    // Group by job
-    const byJob = new Map<string, ApplicationWithContext[]>();
-    for (const app of enrichedApps) {
-      const jobId = app.jobId;
-      if (!byJob.has(jobId)) {
-        byJob.set(jobId, []);
-      }
-      byJob.get(jobId)!.push(app);
-    }
-
-    const staleCount = enrichedApps.filter((a) => a.isStale).length;
-    const needsDecisionCount = enrichedApps.filter((a) =>
-      this.needsDecision(a)
-    ).length;
-
-    // Create fallback stage for unknown stages
-    const fallbackStage: InterviewStage = {
-      id: "unknown",
-      title: "Unknown Stage",
-      orderInInterviewPlan: 999,
-      interviewStageType: "Interview",
-    };
-
-    // Create fallback job for unknown jobs
-    const fallbackJob: Job = {
-      id: "unknown",
-      title: "Unknown Position",
-      status: "Closed",
-      employmentType: "Unknown",
-      hiringTeam: [],
-      jobPostings: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    return {
-      totalCandidates: applications.length,
-      byStage: Array.from(byStage.entries())
-        .map(([stageId, candidates]) => ({
-          stage: stageMap.get(stageId) ?? { ...fallbackStage, id: stageId },
-          count: candidates.length,
-          candidates,
-        }))
-        .sort((a, b) => a.stage.orderInInterviewPlan - b.stage.orderInInterviewPlan),
-      byJob: Array.from(byJob.entries())
-        .map(([jobId, candidates]) => ({
-          job: jobMap.get(jobId) ?? { ...fallbackJob, id: jobId },
-          count: candidates.length,
-          candidates,
-        }))
-        .sort((a, b) => a.job.title.localeCompare(b.job.title)),
-      staleCount,
-      needsDecisionCount,
-    };
+  getPipelineSummary(): Promise<PipelineSummary> {
+    return this.pipelineService.getPipelineSummary();
   }
 
-  async getStaleCandidates(limit: number = 10): Promise<ApplicationWithContext[]> {
-    const [applications, stages, jobs] = await Promise.all([
-      this.client.listApplications({ status: "Active" }),
-      this.client.listInterviewStages(),
-      this.client.listJobs(),
-    ]);
-
-    const stageMap = new Map(stages.map((s) => [s.id, s]));
-    const jobMap = new Map(jobs.map((j) => [j.id, j]));
-
-    return applications
-      .map((app) => this.enrichApplication(app, stageMap, jobMap))
-      .filter((app) => app.isStale)
-      .sort((a, b) => b.daysInCurrentStage - a.daysInCurrentStage)
-      .slice(0, limit);
+  getStaleCandidates(limit?: number): Promise<ApplicationWithContext[]> {
+    return this.pipelineService.getStaleCandidates(limit);
   }
 
-  async getCandidatesNeedingDecision(limit: number = 10): Promise<ApplicationWithContext[]> {
-    const [applications, stages, jobs] = await Promise.all([
-      this.client.listApplications({ status: "Active" }),
-      this.client.listInterviewStages(),
-      this.client.listJobs(),
-    ]);
-
-    const stageMap = new Map(stages.map((s) => [s.id, s]));
-    const jobMap = new Map(jobs.map((j) => [j.id, j]));
-
-    return applications
-      .map((app) => this.enrichApplication(app, stageMap, jobMap))
-      .filter((app) => this.needsDecision(app))
-      .sort((a, b) => b.daysInCurrentStage - a.daysInCurrentStage)
-      .slice(0, limit);
+  getCandidatesNeedingDecision(limit?: number): Promise<ApplicationWithContext[]> {
+    return this.pipelineService.getCandidatesNeedingDecision(limit);
   }
 
-  async getRecentApplications(days: number = 7): Promise<ApplicationWithContext[]> {
-    const [applications, stages, jobs] = await Promise.all([
-      this.client.listApplications({ status: "Active" }),
-      this.client.listInterviewStages(),
-      this.client.listJobs(),
-    ]);
+  getRecentApplications(days?: number): Promise<ApplicationWithContext[]> {
+    return this.pipelineService.getRecentApplications(days);
+  }
 
-    const stageMap = new Map(stages.map((s) => [s.id, s]));
-    const jobMap = new Map(jobs.map((j) => [j.id, j]));
-    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-
-    return applications
-      .filter((app) => new Date(app.createdAt).getTime() > cutoff)
-      .map((app) => this.enrichApplication(app, stageMap, jobMap))
-      .sort((a, b) =>
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-      );
+  getDailySummaryData(): Promise<DailySummaryData> {
+    return this.pipelineService.getDailySummaryData();
   }
 
   // ===========================================================================
-  // Job Operations
+  // Job Operations (delegated to JobService)
   // ===========================================================================
 
-  async getOpenJobs(): Promise<Job[]> {
-    return this.client.getOpenJobs();
+  getOpenJobs(): Promise<Job[]> {
+    return this.jobService.getOpenJobs();
   }
 
-  async getJobWithCandidates(jobId: string): Promise<{
+  getJob(jobId: string): Promise<Job> {
+    return this.client.getJob(jobId);
+  }
+
+  getJobWithCandidates(jobId: string): Promise<{
     job: Job;
     candidates: ApplicationWithContext[];
   }> {
-    const [job, applications, stages, jobs] = await Promise.all([
-      this.client.getJob(jobId),
-      this.client.getApplicationsForJob(jobId),
-      this.client.listInterviewStages(),
-      this.client.listJobs(),
-    ]);
+    return this.jobService.getJobWithCandidates(jobId);
+  }
 
-    const stageMap = new Map(stages.map((s) => [s.id, s]));
-    const jobMap = new Map(jobs.map((j) => [j.id, j]));
+  findStageByName(stageName: string): Promise<InterviewStage | null> {
+    return this.jobService.findStageByName(stageName);
+  }
 
-    const candidates = applications.map((app) =>
-      this.enrichApplication(app, stageMap, jobMap)
-    );
+  getArchiveReasons(): Promise<ArchiveReason[]> {
+    return this.jobService.getArchiveReasons();
+  }
 
-    return { job, candidates };
+  listSources(): Promise<Array<{ id: string; title: string }>> {
+    return this.jobService.listSources();
+  }
+
+  listHiringTeamRoles(): Promise<Array<{ id: string; label: string }>> {
+    return this.jobService.listHiringTeamRoles();
+  }
+
+  getApplicationHiringTeam(applicationId: string): Promise<Array<{
+    userId: string;
+    roleId: string;
+    role: { id: string; label: string };
+  }>> {
+    return this.jobService.getApplicationHiringTeam(applicationId);
+  }
+
+  listCustomFields(): Promise<Array<{ id: string; title: string; fieldType: string }>> {
+    return this.jobService.listCustomFields();
+  }
+
+  listLocations(): Promise<Array<{ id: string; name: string }>> {
+    return this.jobService.listLocations();
+  }
+
+  listDepartments(): Promise<Array<{ id: string; name: string }>> {
+    return this.jobService.listDepartments();
+  }
+
+  getApplicationHistory(applicationId: string): Promise<Array<Record<string, unknown>>> {
+    return this.jobService.getApplicationHistory(applicationId);
+  }
+
+  getInterviewStageDetails(interviewStageId: string): Promise<InterviewStage | null> {
+    return this.jobService.getInterviewStageDetails(interviewStageId);
   }
 
   // ===========================================================================
-  // Write Operations
+  // Write Operations (delegated to WriteService)
   // ===========================================================================
 
-  async addNote(
-    candidateId: string,
-    content: string
-  ): Promise<Note> {
-    return this.client.addNote(candidateId, content);
+  addNote(candidateId: string, content: string): Promise<Note> {
+    return this.writeService.addNote(candidateId, content);
   }
 
-  async moveToStage(
-    applicationId: string,
-    stageId: string
-  ): Promise<Application> {
-    return this.client.moveApplicationStage(applicationId, stageId);
+  moveToStage(applicationId: string, stageId: string): Promise<Application> {
+    return this.writeService.moveToStage(applicationId, stageId);
   }
 
-  async createApplication(params: {
+  createApplication(params: {
     candidateId: string;
     jobId: string;
     sourceId?: string;
     creditedToUserId?: string;
   }): Promise<Application> {
-    return this.client.createApplication(params);
+    return this.writeService.createApplication(params);
   }
 
-  async transferApplication(
-    applicationId: string,
-    jobId: string
+  transferApplication(applicationId: string, jobId: string): Promise<Application> {
+    return this.writeService.transferApplication(applicationId, jobId);
+  }
+
+  rejectCandidate(
+    candidateId: string,
+    archiveReasonId: string,
+    applicationId?: string
   ): Promise<Application> {
-    return this.client.transferApplication(applicationId, jobId);
-  }
-
-  async addCandidateTag(candidateId: string, tagId: string): Promise<Candidate> {
-    return this.client.addCandidateTag(candidateId, tagId);
-  }
-
-  async listCandidateTags(): Promise<Array<{ id: string; title: string }>> {
-    return this.client.listCandidateTags();
-  }
-
-  async findStageByName(stageName: string): Promise<InterviewStage | null> {
-    const stages = await this.client.listInterviewStages();
-    const normalizedName = stageName.toLowerCase().trim();
-
-    return stages.find((s) =>
-      s.title.toLowerCase().includes(normalizedName)
-    ) ?? null;
+    return this.writeService.rejectCandidate(candidateId, archiveReasonId, applicationId);
   }
 
   // ===========================================================================
-  // Interview Scheduling Operations
+  // Interview Scheduling (delegated to InterviewService)
   // ===========================================================================
 
-  async listInterviewPlans(): Promise<InterviewPlan[]> {
-    return this.client.listInterviewPlans();
+  listInterviewPlans(): Promise<InterviewPlan[]> {
+    return this.interviewService.listInterviewPlans();
   }
 
-  async listUsers(): Promise<User[]> {
-    return this.client.listUsers();
+  listUsers(): Promise<User[]> {
+    return this.interviewService.listUsers();
   }
 
-  async getInterviewSchedulesForCandidate(candidateId: string): Promise<InterviewSchedule[]> {
-    const { applications } = await this.client.getCandidateWithApplications(
-      candidateId
-    );
-
-    // Get schedules for all applications - use allSettled to handle partial failures
-    const results = await Promise.allSettled(
-      applications.map((app) => this.client.listInterviewSchedules(app.id))
-    );
-
-    // Extract successful results, ignore failures
-    return results
-      .filter((r): r is PromiseFulfilledResult<InterviewSchedule[]> => r.status === "fulfilled")
-      .flatMap((r) => r.value);
+  getInterviewSchedulesForCandidate(candidateId: string): Promise<InterviewSchedule[]> {
+    return this.interviewService.getInterviewSchedulesForCandidate(candidateId);
   }
 
-  async scheduleInterview(
+  scheduleInterview(
     candidateId: string,
     startTime: string,
     endTime: string,
@@ -410,565 +302,35 @@ export class AshbyService {
     location?: string,
     applicationId?: string
   ): Promise<InterviewSchedule> {
-    const activeApp = await this.getActiveApplicationForCandidate(candidateId, applicationId);
-
-    if (!activeApp) {
-      throw new Error("No active application found for this candidate");
-    }
-
-    // Look up interviewer emails from user IDs
-    const users = await this.client.listUsers();
-    const userMap = new Map(users.map((u) => [u.id, u]));
-
-    const interviewers = interviewerIds.map((id) => {
-      const user = userMap.get(id);
-      if (!user) {
-        throw new Error(`Could not find user with ID ${id}`);
-      }
-      return {
-        email: user.email,
-        feedbackRequired: true,
-      };
-    });
-
-    const event: {
-      startTime: string;
-      endTime: string;
-      interviewers: Array<{ email: string; feedbackRequired: boolean }>;
-      location?: string;
-      meetingLink?: string;
-    } = {
+    return this.interviewService.scheduleInterview(
+      candidateId,
       startTime,
       endTime,
-      interviewers,
-    };
-
-    if (meetingLink) event.meetingLink = meetingLink;
-    if (location) event.location = location;
-
-    return this.client.createInterviewSchedule(activeApp.id, [event]);
-  }
-
-  // ===========================================================================
-  // Daily Summary
-  // ===========================================================================
-
-  async getDailySummaryData(): Promise<DailySummaryData> {
-    // Use allSettled to ensure partial data is returned even if some calls fail
-    const [staleResult, decisionResult, summaryResult, recentResult] = await Promise.allSettled([
-      this.getStaleCandidates(5),
-      this.getCandidatesNeedingDecision(5),
-      this.getPipelineSummary(),
-      this.getRecentApplications(1),
-    ]);
-
-    // Extract successful results with empty fallbacks
-    const staleCandidates = staleResult.status === "fulfilled" ? staleResult.value : [];
-    const needsDecision = decisionResult.status === "fulfilled" ? decisionResult.value : [];
-    const summary = summaryResult.status === "fulfilled" ? summaryResult.value : null;
-    const recentApps = recentResult.status === "fulfilled" ? recentResult.value : [];
-
-    return {
-      staleCandidate: staleCandidates.map((app) => ({
-        name: app.candidate?.name ?? "Unknown",
-        email: app.candidate?.primaryEmailAddress?.value ?? "No email",
-        stage: app.currentInterviewStage?.title ?? "Unknown",
-        job: app.job?.title ?? "Unknown",
-        daysInStage: app.daysInCurrentStage,
-      })),
-      needsDecision: needsDecision.map((app) => ({
-        name: app.candidate?.name ?? "Unknown",
-        email: app.candidate?.primaryEmailAddress?.value ?? "No email",
-        stage: app.currentInterviewStage?.title ?? "Unknown",
-        job: app.job?.title ?? "Unknown",
-        daysWaiting: app.daysInCurrentStage,
-      })),
-      stats: {
-        totalActive: summary?.totalCandidates ?? 0,
-        openRoles: summary?.byJob.length ?? 0,
-        newApplications: recentApps.length,
-      },
-    };
-  }
-
-  // ===========================================================================
-  // Hired Candidate Protection
-  // ===========================================================================
-
-  async isHiredCandidate(candidateId: string): Promise<boolean> {
-    const { applications } = await this.client.getCandidateWithApplications(
-      candidateId
-    );
-
-    return applications.some(
-      (app) =>
-        app.status === "Hired" ||
-        app.currentInterviewStage?.title.toLowerCase().includes("hired")
+      interviewerIds,
+      meetingLink,
+      location,
+      applicationId
     );
   }
 
-  // ===========================================================================
-  // Candidate Scorecards (Feature 1)
-  // ===========================================================================
-
-  async getCandidateScorecard(
-    candidateId: string,
-    applicationId?: string
-  ): Promise<Scorecard> {
-    const [candidateResult, jobsResult] = await Promise.allSettled([
-      this.client.getCandidateWithApplications(candidateId),
-      this.client.listJobs(),
-    ]);
-
-    if (candidateResult.status === "rejected") {
-      throw candidateResult.reason;
-    }
-
-    const { candidate, applications } = candidateResult.value;
-    const jobs = jobsResult.status === "fulfilled" ? jobsResult.value : [];
-    const jobMap = new Map(jobs.map((j) => [j.id, j]));
-
-    const selectedApp = this.selectApplicationForRead(applications, applicationId);
-    if (!selectedApp) {
-      throw new Error("No application found for this candidate");
-    }
-
-    let submissions: FeedbackSubmission[] = [];
-    try {
-      submissions = await this.client.getApplicationFeedback(selectedApp.id);
-    } catch {
-      submissions = [];
-    }
-
-    // Extract pros, cons, and recommendations from field submissions
-    const pros: string[] = [];
-    const cons: string[] = [];
-    const recommendations: string[] = [];
-
-    // Aggregate attribute ratings across all submissions
-    const attributeMap = new Map<string, {
-      ratings: Array<{ rating: number; submittedBy?: string; submittedAt: string }>;
-      textResponses: string[];
-    }>();
-
-    // Build individual interviewer scorecards
-    const interviewerScorecards: Scorecard["interviewerScorecards"] = [];
-    const overallRatings: number[] = [];
-
-    for (const submission of submissions) {
-      // Get submitter name from the embedded user object
-      const submitterName = submission.submittedByUser
-        ? `${submission.submittedByUser.firstName} ${submission.submittedByUser.lastName}`.trim()
-        : submission.submittedBy?.name ?? "Unknown";
-
-      const fieldLookup = this.buildFeedbackFieldLookup(submission);
-      const submittedValues = submission.submittedValues ?? {};
-
-      // Extract overall recommendation value and map to label
-      const overallRecValue =
-        submittedValues["overall_recommendation"] ??
-        submittedValues["overallRecommendation"] ??
-        submittedValues["recommendation"];
-      let overallRecommendation: string | null = null;
-      let overallRating: number | null = null;
-
-      if (overallRecValue !== undefined && overallRecValue !== null) {
-        const recField = fieldLookup.get("overall_recommendation");
-        if (recField?.selectableValues) {
-          const match = recField.selectableValues.find((sv) => sv.value === String(overallRecValue));
-          overallRecommendation = match?.label ?? String(overallRecValue);
-        } else {
-          overallRecommendation = String(overallRecValue);
-        }
-        const parsed = parseInt(String(overallRecValue), 10);
-        if (!isNaN(parsed)) {
-          overallRating = parsed;
-        }
-      }
-
-      if (!overallRecommendation && submission.overallRecommendation) {
-        overallRecommendation = submission.overallRecommendation;
-      }
-
-      const ratingCandidate = submission.overallRating ?? submission.rating;
-      if (typeof ratingCandidate === "number" && overallRating === null) {
-        overallRating = ratingCandidate;
-      }
-
-      if (overallRating === null) {
-        const ratingValue =
-          submittedValues["overall_rating"] ??
-          submittedValues["overallRating"] ??
-          submittedValues["rating"];
-        const coercedRating = this.coerceFeedbackValue(ratingValue);
-        if (coercedRating.numericValue !== null) {
-          overallRating = coercedRating.numericValue;
-        }
-      }
-
-      if (overallRating !== null) {
-        overallRatings.push(overallRating);
-      }
-      if (overallRecommendation) {
-        recommendations.push(overallRecommendation);
-      }
-
-      // Build this interviewer's scorecard
-      const interviewerCard: Scorecard["interviewerScorecards"][number] = {
-        interviewerId: submission.submittedByUser?.id ?? "unknown",
-        interviewerName: submitterName,
-        submittedAt: submission.submittedAt ?? "",
-        overallRating,
-        overallRecommendation,
-        attributeRatings: [],
-      };
-
-      const fields = this.buildFieldSubmissions(submission);
-      for (const field of fields) {
-        const title = field.fieldTitle;
-        const fieldType = field.fieldType || "unknown";
-        const titleLower = title.toLowerCase();
-        if (titleLower.includes("overall recommendation") || titleLower.includes("overall rating")) {
-          continue;
-        }
-
-        const { numericValue, textValue } = this.coerceFeedbackValue(field.value);
-
-        // Add to interviewer's card
-        interviewerCard.attributeRatings.push({
-          name: title,
-          rating: numericValue,
-          textValue: textValue || (numericValue !== null ? String(numericValue) : null),
-        });
-
-        // Aggregate ratings by attribute name
-        if (!attributeMap.has(title)) {
-          attributeMap.set(title, { ratings: [], textResponses: [] });
-        }
-        const attr = attributeMap.get(title)!;
-
-        if (numericValue !== null) {
-          attr.ratings.push({
-            rating: numericValue,
-            submittedBy: submitterName,
-            submittedAt: submission.submittedAt ?? "",
-          });
-        }
-        if (textValue && fieldType === "RichText") {
-          attr.textResponses.push(textValue);
-        }
-
-        // Extract pros/cons based on field title
-        if (textValue) {
-          if (titleLower.includes("strength") || titleLower.includes("pro") || titleLower.includes("positive")) {
-            pros.push(textValue);
-          } else if (titleLower.includes("weakness") || titleLower.includes("con") || titleLower.includes("concern") || titleLower.includes("improvement")) {
-            cons.push(textValue);
-          }
-        }
-      }
-
-      interviewerScorecards.push(interviewerCard);
-    }
-
-    // Calculate overall average rating
-    const overallRating =
-      overallRatings.length > 0
-        ? Math.round((overallRatings.reduce((a, b) => a + b, 0) / overallRatings.length) * 10) / 10
-        : null;
-
-    // Build aggregated attribute ratings
-    const attributeRatings: Scorecard["attributeRatings"] = [];
-    for (const [name, data] of attributeMap) {
-      const numericRatings = data.ratings.map((r) => r.rating);
-      const avgRating =
-        numericRatings.length > 0
-          ? Math.round((numericRatings.reduce((a, b) => a + b, 0) / numericRatings.length) * 10) / 10
-          : null;
-
-      attributeRatings.push({
-        name,
-        averageRating: avgRating,
-        ratings: data.ratings,
-        textResponses: data.textResponses,
-      });
-    }
-
-    // Get the primary job for this candidate
-    const job = jobMap.get(selectedApp.jobId) ?? null;
-
-    return {
-      candidate,
-      job,
-      overallRating,
-      feedbackCount: submissions.length,
-      pros: [...new Set(pros)], // Dedupe
-      cons: [...new Set(cons)],
-      recommendations: [...new Set(recommendations)],
-      submissions,
-      attributeRatings,
-      interviewerScorecards,
-    };
-  }
-
-  // ===========================================================================
-  // Source Analytics (Feature 7)
-  // ===========================================================================
-
-  async getSourceAnalytics(days: number = 90): Promise<SourceAnalytics[]> {
-    // Fetch all applications (not just active) to get full picture
-    const [activeApps, hiredApps, archivedApps] = await Promise.all([
-      this.client.listApplications({ status: "Active" }),
-      this.client.listApplications({ status: "Hired" }),
-      this.client.listApplications({ status: "Archived" }),
-    ]);
-
-    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-    const allApps = [...activeApps, ...hiredApps, ...archivedApps].filter(
-      (app) => new Date(app.createdAt).getTime() > cutoff
-    );
-
-    // Group by source
-    const bySource = new Map<string, Application[]>();
-    for (const app of allApps) {
-      const sourceKey = app.source?.id ?? "unknown";
-      if (!bySource.has(sourceKey)) {
-        bySource.set(sourceKey, []);
-      }
-      bySource.get(sourceKey)!.push(app);
-    }
-
-    // Calculate analytics per source
-    const analytics: SourceAnalytics[] = [];
-    for (const apps of bySource.values()) {
-      const activeCount = apps.filter((a) => a.status === "Active").length;
-      const hiredCount = apps.filter((a) => a.status === "Hired").length;
-      const archivedCount = apps.filter((a) => a.status === "Archived").length;
-      const totalApplications = apps.length;
-
-      // Calculate average days to hire
-      const hiredWithDates = apps.filter((a) => a.status === "Hired");
-      let avgDaysToHire: number | null = null;
-      if (hiredWithDates.length > 0) {
-        const daysToHire = hiredWithDates.map((a) => {
-          const created = new Date(a.createdAt).getTime();
-          const updated = new Date(a.updatedAt).getTime();
-          return Math.floor((updated - created) / (24 * 60 * 60 * 1000));
-        });
-        avgDaysToHire = Math.round(
-          daysToHire.reduce((a, b) => a + b, 0) / daysToHire.length
-        );
-      }
-
-      analytics.push({
-        source: apps[0]?.source ?? null,
-        sourceName: apps[0]?.source?.title ?? "Unknown Source",
-        totalApplications,
-        activeCount,
-        hiredCount,
-        archivedCount,
-        conversionRate: totalApplications > 0 ? Math.round((hiredCount / totalApplications) * 100) : 0,
-        avgDaysToHire,
-      });
-    }
-
-    // Sort by total applications descending
-    return analytics.sort((a, b) => b.totalApplications - a.totalApplications);
-  }
-
-  // ===========================================================================
-  // Rejection / Archive (Feature 5)
-  // ===========================================================================
-
-  async getArchiveReasons(): Promise<ArchiveReason[]> {
-    return this.client.listArchiveReasons();
-  }
-
-  async rejectCandidate(
-    candidateId: string,
-    archiveReasonId: string,
-    applicationId?: string
-  ): Promise<Application> {
-    const activeApp = await this.getActiveApplicationForCandidate(candidateId, applicationId);
-
-    if (!activeApp) {
-      throw new Error("No active application found for this candidate");
-    }
-
-    return this.client.archiveApplication(activeApp.id, archiveReasonId);
-  }
-
-  // ===========================================================================
-  // Candidate Comparison (Feature 3)
-  // ===========================================================================
-
-  async compareCandidates(
-    candidateIds?: string[],
-    jobId?: string,
-    limit: number = 3
-  ): Promise<CandidateComparison> {
-    let candidates: CandidateWithContext[] = [];
-    let job: Job | null = null;
-
-    if (candidateIds && candidateIds.length > 0) {
-      // Get specific candidates
-      const contexts = await Promise.all(
-        candidateIds.slice(0, Math.min(limit, 5)).map(async (id) => {
-          const ctx = await this.getCandidateFullContext(id);
-          return {
-            ...ctx.candidate,
-            applications: ctx.applications,
-            notes: ctx.notes,
-          } as CandidateWithContext;
-        })
-      );
-      candidates = contexts;
-
-      // Get the job from the first candidate's active application
-      const firstApp = contexts[0]?.applications.find((a) => a.status === "Active");
-      if (firstApp) {
-        job = firstApp.job;
-      }
-    } else if (jobId) {
-      // Get top candidates for a job
-      const { job: jobData, candidates: jobCandidates } = await this.getJobWithCandidates(jobId);
-      job = jobData;
-
-      // Get full context for top candidates
-      const topApps = jobCandidates.slice(0, limit);
-      candidates = await Promise.all(
-        topApps.map(async (app) => {
-          const ctx = await this.getCandidateFullContext(app.candidateId);
-          return {
-            ...ctx.candidate,
-            applications: ctx.applications,
-            notes: ctx.notes,
-          } as CandidateWithContext;
-        })
-      );
-    }
-
-    return {
-      candidates,
-      job,
-      comparisonFields: ["name", "currentStage", "daysInStage", "source", "email"],
-    };
-  }
-
-  // ===========================================================================
-  // Interview Prep Packet (Feature 6)
-  // ===========================================================================
-
-  async getInterviewPrepPacket(
-    candidateId: string,
-    applicationId?: string
-  ): Promise<PrepPacket> {
-    const [contextResult, scorecardResult, schedulesResult] = await Promise.allSettled([
-      this.getCandidateFullContext(candidateId),
-      this.getCandidateScorecard(candidateId, applicationId),
-      this.getInterviewSchedulesForCandidate(candidateId),
-    ]);
-
-    if (contextResult.status === "rejected") {
-      throw contextResult.reason;
-    }
-
-    const context = contextResult.value;
-    const scorecard = scorecardResult.status === "fulfilled" ? scorecardResult.value : null;
-    const schedules = schedulesResult.status === "fulfilled" ? schedulesResult.value : [];
-
-    const { candidate, applications, notes } = context;
-
-    // Get the active application's job
-    const selectedApp = this.selectApplicationForRead(applications, applicationId);
-    const job = selectedApp?.job ?? null;
-
-    // Find upcoming interview
-    const now = new Date();
-    const upcomingEvents = schedules
-      .flatMap((s) => s.interviewEvents)
-      .filter((e) => new Date(e.startTime) > now)
-      .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
-    const upcomingInterview = upcomingEvents[0] ?? null;
-
-    // Generate highlights from candidate data
-    const highlights: string[] = [];
-    if (candidate.source?.title) {
-      highlights.push(`Source: ${candidate.source.title}`);
-    }
-    if (selectedApp?.currentInterviewStage) {
-      highlights.push(`Current Stage: ${selectedApp.currentInterviewStage.title}`);
-      highlights.push(`Days in Stage: ${selectedApp.daysInCurrentStage}`);
-    }
-    if (candidate.socialLinks.length > 0) {
-      const linkedin = candidate.socialLinks.find((l) => l.type === "LinkedIn" || l.url.includes("linkedin"));
-      if (linkedin) {
-        highlights.push(`LinkedIn: ${linkedin.url}`);
-      }
-    }
-    if (scorecard && scorecard.overallRating !== null) {
-      highlights.push(`Interview Rating: ${scorecard.overallRating}/5 (${scorecard.feedbackCount} reviews)`);
-    }
-
-    return {
-      candidate,
-      job,
-      highlights,
-      priorFeedback: scorecard,
-      upcomingInterview,
-      notes,
-      profileUrl: candidate.profileUrl,
-    };
-  }
-
-  // ===========================================================================
-  // Candidate Creation (Phase 1 - Feature 11)
-  // ===========================================================================
-
-  async createCandidate(params: CreateCandidateParams): Promise<Candidate> {
-    return this.client.createCandidate(params);
-  }
-
-  async updateCandidate(
-    candidateId: string,
-    updates: Partial<CreateCandidateParams>
-  ): Promise<Candidate> {
-    return this.client.updateCandidate(candidateId, updates);
-  }
-
-  // ===========================================================================
-  // Interviews (Phase 1 - Features 8-10)
-  // ===========================================================================
-
-  async listAllInterviews(filters?: {
+  listAllInterviews(filters?: {
     applicationId?: string;
     userId?: string;
     startDate?: string;
     endDate?: string;
   }): Promise<Interview[]> {
-    return this.client.listInterviews(filters);
+    return this.interviewService.listAllInterviews(filters);
   }
 
-  async getInterview(interviewId: string): Promise<Interview> {
-    return this.client.getInterview(interviewId);
+  getInterview(interviewId: string): Promise<Interview> {
+    return this.interviewService.getInterview(interviewId);
   }
 
-  async getUpcomingInterviews(limit: number = 10): Promise<Interview[]> {
-    const now = new Date().toISOString();
-    const allInterviews = await this.client.listInterviews({
-      startDate: now,
-    });
-
-    return allInterviews
-      .filter((i) => i.scheduledStartTime && new Date(i.scheduledStartTime) > new Date())
-      .sort((a, b) => {
-        if (!a.scheduledStartTime || !b.scheduledStartTime) return 0;
-        return new Date(a.scheduledStartTime).getTime() - new Date(b.scheduledStartTime).getTime();
-      })
-      .slice(0, limit);
+  getUpcomingInterviews(limit?: number): Promise<Interview[]> {
+    return this.interviewService.getUpcomingInterviews(limit);
   }
 
-  async rescheduleInterview(
+  rescheduleInterview(
     interviewScheduleId: string,
     newStartTime: string,
     newEndTime: string,
@@ -976,95 +338,73 @@ export class AshbyService {
     meetingLink?: string,
     location?: string
   ): Promise<InterviewSchedule> {
-    // Look up interviewer emails from user IDs
-    const users = await this.client.listUsers();
-    const userMap = new Map(users.map((u) => [u.id, u]));
-
-    const interviewers = interviewerIds.map((id) => {
-      const user = userMap.get(id);
-      if (!user) {
-        throw new Error(`Could not find user with ID ${id}`);
-      }
-      return {
-        email: user.email,
-        feedbackRequired: true,
-      };
-    });
-
-    const event: {
-      startTime: string;
-      endTime: string;
-      interviewers: Array<{ email: string; feedbackRequired: boolean }>;
-      location?: string;
-      meetingLink?: string;
-    } = {
-      startTime: newStartTime,
-      endTime: newEndTime,
-      interviewers,
-    };
-
-    if (meetingLink) event.meetingLink = meetingLink;
-    if (location) event.location = location;
-
-    return this.client.updateInterviewSchedule(interviewScheduleId, [event]);
+    return this.interviewService.rescheduleInterview(
+      interviewScheduleId,
+      newStartTime,
+      newEndTime,
+      interviewerIds,
+      meetingLink,
+      location
+    );
   }
 
-  async cancelInterview(
+  cancelInterview(
     interviewScheduleId: string,
     cancellationReason?: string
   ): Promise<{ success: boolean }> {
-    return this.client.cancelInterviewSchedule(interviewScheduleId, cancellationReason);
+    return this.interviewService.cancelInterview(interviewScheduleId, cancellationReason);
+  }
+
+  listInterviewEvents(interviewScheduleId?: string): Promise<InterviewEvent[]> {
+    return this.interviewService.listInterviewEvents(interviewScheduleId);
   }
 
   // ===========================================================================
-  // Feedback (Phase 2)
+  // Feedback (delegated to FeedbackService)
   // ===========================================================================
 
-  async listFeedbackSubmissions(filters?: {
+  getCandidateScorecard(
+    candidateId: string,
+    applicationId?: string
+  ): Promise<Scorecard> {
+    return this.feedbackService.getCandidateScorecard(candidateId, applicationId);
+  }
+
+  listFeedbackSubmissions(filters?: {
     applicationId?: string;
     interviewId?: string;
     authorId?: string;
   }): Promise<FeedbackSubmission[]> {
-    const submissions = await this.client.listFeedbackSubmissions(filters);
-    for (const submission of submissions) {
-      if (submission?.id) {
-        this.feedbackSubmissionCache.set(submission.id, submission);
-      }
-    }
-    return submissions;
+    return this.feedbackService.listFeedbackSubmissions(filters);
+  }
+
+  getFeedbackDetails(feedbackSubmissionId: string): Promise<FeedbackSubmission> {
+    return this.feedbackService.getFeedbackDetails(feedbackSubmissionId);
   }
 
   // ===========================================================================
-  // Offers (Phase 1 - Features 1-7)
+  // Offers (delegated to OfferService)
   // ===========================================================================
 
-  async listOffers(filters?: {
+  listOffers(filters?: {
     applicationId?: string;
     status?: OfferStatus;
   }): Promise<Offer[]> {
-    return this.client.listOffers(filters);
+    return this.offerService.listOffers(filters);
   }
 
-  async getPendingOffers(): Promise<Offer[]> {
-    const allOffers = await this.client.listOffers();
-    return allOffers.filter((o) =>
-      ["Draft", "Pending", "Approved"].includes(o.status)
-    );
+  getPendingOffers(): Promise<Offer[]> {
+    return this.offerService.getPendingOffers();
   }
 
-  async getOfferForCandidate(
+  getOfferForCandidate(
     candidateId: string,
     applicationId?: string
   ): Promise<Offer | null> {
-    const activeApp = await this.getActiveApplicationForCandidate(candidateId, applicationId);
-
-    if (!activeApp) return null;
-
-    const offers = await this.client.listOffers({ applicationId: activeApp.id });
-    return offers[0] ?? null;
+    return this.offerService.getOfferForCandidate(candidateId, applicationId);
   }
 
-  async createOffer(params: {
+  createOffer(params: {
     candidateId: string;
     offerProcessId: string;
     startDate: string;
@@ -1079,34 +419,10 @@ export class AshbyService {
     notes?: string;
     applicationId?: string;
   }): Promise<Offer> {
-    const activeApp = await this.getActiveApplicationForCandidate(
-      params.candidateId,
-      params.applicationId
-    );
-
-    if (!activeApp) {
-      throw new Error("No active application found for this candidate");
-    }
-
-    return this.client.createOffer({
-      applicationId: activeApp.id,
-      offerProcessId: params.offerProcessId,
-      startDate: params.startDate,
-      salary: params.salary,
-      ...(params.salaryFrequency ? { salaryFrequency: params.salaryFrequency } : {}),
-      ...(params.currency ? { currency: params.currency } : {}),
-      ...(params.equity !== undefined ? { equity: params.equity } : {}),
-      ...(params.equityType ? { equityType: params.equityType } : {}),
-      ...(params.signingBonus !== undefined ? { signingBonus: params.signingBonus } : {}),
-      ...(params.relocationBonus !== undefined ? { relocationBonus: params.relocationBonus } : {}),
-      ...(params.variableCompensation !== undefined
-        ? { variableCompensation: params.variableCompensation }
-        : {}),
-      ...(params.notes ? { notes: params.notes } : {}),
-    });
+    return this.offerService.createOffer(params);
   }
 
-  async updateOffer(
+  updateOffer(
     offerId: string,
     updates: {
       salary?: number;
@@ -1118,797 +434,64 @@ export class AshbyService {
       notes?: string;
     }
   ): Promise<Offer> {
-    return this.client.updateOffer(offerId, updates);
+    return this.offerService.updateOffer(offerId, updates);
   }
 
-  async approveOffer(offerId: string, approverId: string): Promise<Offer> {
-    return this.client.approveOffer(offerId, approverId);
+  approveOffer(offerId: string, approverId: string): Promise<Offer> {
+    return this.offerService.approveOffer(offerId, approverId);
   }
 
-  async sendOffer(offerId: string): Promise<Offer> {
-    return this.client.startOffer(offerId);
+  sendOffer(offerId: string): Promise<Offer> {
+    return this.offerService.sendOffer(offerId);
   }
 
   // ===========================================================================
-  // Private Helpers
+  // Analytics (delegated to AnalyticsService)
   // ===========================================================================
 
-  private selectActiveApplication<T extends { id: string; status: Application["status"] }>(
-    applications: T[],
+  getSourceAnalytics(days?: number): Promise<SourceAnalytics[]> {
+    return this.analyticsService.getSourceAnalytics(days);
+  }
+
+  compareCandidates(
+    candidateIds?: string[],
+    jobId?: string,
+    limit?: number
+  ): Promise<CandidateComparison> {
+    return this.analyticsService.compareCandidates(candidateIds, jobId, limit);
+  }
+
+  getInterviewPrepPacket(
+    candidateId: string,
     applicationId?: string
-  ): T | null {
-    if (applicationId) {
-      const match = applications.find((app) => app.id === applicationId);
-      if (!match) {
-        throw new Error("Provided application_id does not belong to this candidate.");
-      }
-      if (match.status !== "Active") {
-        throw new Error("Selected application is not active. Please provide an active application_id.");
-      }
-      return match;
-    }
-
-    const activeApps = applications.filter((app) => app.status === "Active");
-    if (activeApps.length === 0) {
-      return null;
-    }
-    if (activeApps.length > 1) {
-      const ids = activeApps.slice(0, 3).map((app) => app.id);
-      const extraCount = activeApps.length - ids.length;
-      const hint = ids.length > 0
-        ? ` (e.g., ${ids.join(", ")}${extraCount > 0 ? ` and ${extraCount} more` : ""})`
-        : "";
-      throw new Error(
-        `Multiple active applications found for this candidate. Please provide application_id${hint}.`
-      );
-    }
-
-    return activeApps[0] ?? null;
-  }
-
-  private selectApplicationForRead<T extends { id: string; status: Application["status"]; updatedAt: string }>(
-    applications: T[],
-    applicationId?: string
-  ): T | null {
-    if (applicationId) {
-      const match = applications.find((app) => app.id === applicationId);
-      if (!match) {
-        throw new Error("Provided application_id does not belong to this candidate.");
-      }
-      return match;
-    }
-
-    const activeApps = applications.filter((app) => app.status === "Active");
-    if (activeApps.length === 1) {
-      return activeApps[0]!;
-    }
-    if (activeApps.length > 1) {
-      const ids = activeApps.slice(0, 3).map((app) => app.id);
-      const extraCount = activeApps.length - ids.length;
-      const hint = ids.length > 0
-        ? ` (e.g., ${ids.join(", ")}${extraCount > 0 ? ` and ${extraCount} more` : ""})`
-        : "";
-      throw new Error(
-        `Multiple active applications found for this candidate. Please provide application_id${hint}.`
-      );
-    }
-
-    if (applications.length === 0) {
-      return null;
-    }
-
-    const nonArchived = applications.filter((app) => app.status !== "Archived");
-    const pool = nonArchived.length > 0 ? nonArchived : applications;
-    return [...pool].sort(
-      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-    )[0] ?? null;
-  }
-
-  private buildFeedbackFieldLookup(
-    submission: FeedbackSubmission
-  ): Map<
-    string,
-    { id?: string; title: string; type: string; selectableValues?: Array<{ label: string; value: string }> }
-  > {
-    const lookup = new Map<
-      string,
-      { id?: string; title: string; type: string; selectableValues?: Array<{ label: string; value: string }> }
-    >();
-    const formDefinition = submission.formDefinition;
-    if (!formDefinition) {
-      return lookup;
-    }
-
-    for (const section of formDefinition.sections ?? []) {
-      for (const fieldDef of section.fields) {
-        const f = fieldDef.field;
-        const entry: {
-          id?: string;
-          title: string;
-          type: string;
-          selectableValues?: Array<{ label: string; value: string }>;
-        } = {
-          ...(f.id ? { id: f.id } : {}),
-          title: f.title,
-          type: f.type,
-          ...(f.selectableValues ? { selectableValues: f.selectableValues } : {}),
-        };
-        if (f.path) {
-          lookup.set(f.path, entry);
-        }
-        if (f.id) {
-          lookup.set(f.id, entry);
-        }
-      }
-    }
-
-    return lookup;
-  }
-
-  private buildFieldSubmissions(submission: FeedbackSubmission): FieldSubmission[] {
-    if (submission.fieldSubmissions && submission.fieldSubmissions.length > 0) {
-      return submission.fieldSubmissions;
-    }
-
-    const submittedValues = submission.submittedValues;
-    if (!submittedValues || typeof submittedValues !== "object") {
-      return [];
-    }
-
-    const fieldLookup = this.buildFeedbackFieldLookup(submission);
-    const fields: FieldSubmission[] = [];
-
-    for (const [path, rawValue] of Object.entries(submittedValues)) {
-      if (rawValue === null || rawValue === undefined) continue;
-      const info = fieldLookup.get(path);
-      let value: unknown = rawValue;
-      if (
-        info?.selectableValues &&
-        info.type !== "Score" &&
-        (typeof rawValue === "string" || typeof rawValue === "number")
-      ) {
-        const match = info.selectableValues.find((sv) => sv.value === String(rawValue));
-        if (match) {
-          value = match.label;
-        }
-      }
-      const { numericValue, textValue } = this.coerceFeedbackValue(value);
-      const resolvedValue = numericValue !== null ? numericValue : textValue ?? value;
-
-      fields.push({
-        fieldId: info?.id ?? path,
-        fieldTitle: info?.title ?? path,
-        fieldType: info?.type ?? "unknown",
-        value: resolvedValue,
-      });
-    }
-
-    return fields;
-  }
-
-  private coerceFeedbackValue(rawValue: unknown): {
-    numericValue: number | null;
-    textValue: string | null;
-  } {
-    if (rawValue !== null && typeof rawValue === "object" && "score" in rawValue) {
-      const scoreValue = (rawValue as { score?: number }).score;
-      if (typeof scoreValue === "number") {
-        return { numericValue: scoreValue, textValue: null };
-      }
-    }
-
-    if (typeof rawValue === "number") {
-      return { numericValue: rawValue, textValue: null };
-    }
-
-    if (typeof rawValue === "boolean") {
-      return { numericValue: null, textValue: rawValue ? "Yes" : "No" };
-    }
-
-    if (typeof rawValue === "string") {
-      return { numericValue: null, textValue: rawValue };
-    }
-
-    return { numericValue: null, textValue: null };
-  }
-
-  private enrichApplication(
-    app: Application,
-    stageMap: Map<string, InterviewStage>,
-    jobMap: Map<string, Job>
-  ): ApplicationWithContext {
-    const stage =
-      app.currentInterviewStage ??
-      (app.currentInterviewStageId
-        ? stageMap.get(app.currentInterviewStageId) ?? null
-        : null);
-    const job = jobMap.get(app.jobId);
-    const daysInCurrentStage = this.calculateDaysInStage(app);
-
-    // Create fallback job if not found in map (could happen if job was archived/deleted)
-    const fallbackJob: Job = {
-      id: app.jobId,
-      title: "Unknown Position",
-      status: "Closed",
-      employmentType: "Unknown",
-      hiringTeam: [],
-      jobPostings: [],
-      createdAt: app.createdAt,
-      updatedAt: app.updatedAt,
-    };
-
-    // Create fallback candidate if not embedded in application
-    const fallbackCandidate: Candidate = {
-      id: app.candidateId,
-      name: "Unknown Candidate",
-      primaryEmailAddress: null,
-      phoneNumbers: [],
-      socialLinks: [],
-      tags: [],
-      createdAt: app.createdAt,
-      updatedAt: app.updatedAt,
-      applicationIds: [app.id],
-      profileUrl: "",
-    };
-
-    return {
-      ...app,
-      job: job ?? fallbackJob,
-      candidate: app.candidate ?? fallbackCandidate,
-      currentInterviewStage: stage,
-      daysInCurrentStage,
-      isStale: this.isStale(app, stage, daysInCurrentStage),
-    };
-  }
-
-  private calculateDaysInStage(app: Application): number {
-    const updatedAt = new Date(app.updatedAt).getTime();
-    const now = Date.now();
-    return Math.floor((now - updatedAt) / (24 * 60 * 60 * 1000));
-  }
-
-  private isStale(
-    _app: Application,
-    stage: InterviewStage | null,
-    daysInStage: number
-  ): boolean {
-    // Application Review stage is expected to have backlog - don't flag as stale
-    if (stage?.title.toLowerCase().includes("application review")) {
-      return false;
-    }
-    return daysInStage > this.staleDays;
-  }
-
-  private needsDecision(app: ApplicationWithContext): boolean {
-    const stage = app.currentInterviewStage;
-    if (!stage) return false;
-
-    // Final round stages typically need decisions
-    const decisionStages = ["final", "offer", "decision", "reference"];
-    return decisionStages.some((s) =>
-      stage.title.toLowerCase().includes(s)
-    );
+  ): Promise<PrepPacket> {
+    return this.analyticsService.getInterviewPrepPacket(candidateId, applicationId);
   }
 
   // ===========================================================================
-  // Phase A: Proactive Status Analysis
+  // Proactive Analysis (delegated to AnalysisService)
   // ===========================================================================
 
-  /**
-   * Analyze a single candidate's status with intelligent blocker detection
-   */
-  async analyzeCandidateStatus(
+  analyzeCandidateStatus(
     candidateId: string,
     applicationId?: string
   ): Promise<CandidateStatusAnalysis> {
-    // Get candidate with all applications
-    const { candidate, applications } = await this.client.getCandidateWithApplications(candidateId);
-
-    // Find active application
-    const selectedApp = this.selectApplicationForRead(applications, applicationId);
-    if (!selectedApp) {
-      throw new Error("No application found for candidate");
-    }
-
-    // Get full application details
-    const application = await this.client.getApplication(selectedApp.id);
-
-    // Get current stage (already populated in getApplication)
-    let currentStage: InterviewStage | null | undefined = application.currentInterviewStage;
-    if (!currentStage && application.currentInterviewStageId) {
-      currentStage = await this.client.getInterviewStage(application.currentInterviewStageId);
-    }
-    if (!currentStage) {
-      const fallbackTitle = application.status === "Active" ? "Unknown" : application.status;
-      currentStage = {
-        id: application.currentInterviewStageId ?? `status:${fallbackTitle.toLowerCase()}`,
-        title: fallbackTitle,
-        orderInInterviewPlan: 0,
-        interviewStageType: "Application",
-      };
-    }
-
-    // Calculate days in stage (use updatedAt as approximation)
-    const daysInStage = Math.floor((Date.now() - new Date(application.updatedAt).getTime()) / (1000 * 60 * 60 * 24));
-
-    // Get all interviews for this application
-    const allInterviews = await this.client.listInterviews({ applicationId: application.id });
-
-    // Separate upcoming vs completed interviews
-    const now = new Date();
-    const upcomingInterviews = allInterviews.filter(i =>
-      i.scheduledStartTime && new Date(i.scheduledStartTime) > now
-    );
-    const completedInterviews = allInterviews.filter(i =>
-      i.scheduledStartTime && new Date(i.scheduledStartTime) < now
-    );
-
-    // Get feedback submissions for this application
-    const feedbackSubmissions = await this.client.listFeedbackSubmissions({
-      applicationId: application.id,
-    });
-
-    // Find interviews that don't have feedback yet
-    const hasInterviewIds = feedbackSubmissions.some((feedback) => feedback.interviewId);
-    const completedInterviewsWithoutFeedback =
-      feedbackSubmissions.length === 0
-        ? completedInterviews
-        : hasInterviewIds
-          ? completedInterviews.filter(
-            (interview) =>
-              !feedbackSubmissions.some((feedback) => feedback.interviewId === interview.id)
-          )
-          : [];
-
-    // Get pending offer
-    let pendingOffer: Offer | undefined;
-    try {
-      const offers = await this.client.listOffers({ applicationId: application.id });
-      pendingOffer = offers.find(o => ["Draft", "Pending", "Approved"].includes(o.status));
-    } catch {
-      // Offers might not be available
-    }
-
-    // Detect blockers
-    const blockers = this.detectBlockers({
-      currentStage,
-      daysInStage,
-      upcomingInterviews,
-      completedInterviewsWithoutFeedback,
-      feedbackSubmissions,
-      ...(pendingOffer && { pendingOffer }),
-      application,
-    });
-
-    // Generate recent activity
-    const recentActivity = this.generateRecentActivity({
-      allInterviews,
-      feedbackSubmissions,
-      ...(pendingOffer && { pendingOffer }),
-    });
-
-    // Generate next steps
-    const nextSteps = this.generateNextSteps(blockers, currentStage);
-
-    // Calculate priority
-    const priority = this.calculatePriority(blockers, daysInStage);
-
-    return {
-      candidate,
-      application,
-      currentStage,
-      daysInStage,
-      blockers,
-      recentActivity,
-      nextSteps,
-      priority,
-      upcomingInterviews,
-      completedInterviewsWithoutFeedback,
-      ...(pendingOffer && { pendingOffer }),
-    };
+    return this.analysisService.analyzeCandidateStatus(candidateId, applicationId);
   }
 
-  /**
-   * Batch analyze multiple candidates for blockers
-   */
-  async analyzeCandidateBlockers(candidateIds?: string[]): Promise<BatchBlockerAnalysis> {
-    let candidates: Array<{ candidate: Candidate; applications: Application[] }> = [];
-
-    if (candidateIds && candidateIds.length > 0) {
-      // Analyze specific candidates
-      candidates = await Promise.all(
-        candidateIds.map(id => this.client.getCandidateWithApplications(id))
-      );
-    } else {
-      // Analyze all stale candidates
-      const stale = await this.getStaleCandidates();
-      const uniqueCandidateIds = [...new Set(stale.map(app => app.candidateId))];
-      candidates = await Promise.all(
-        uniqueCandidateIds.map(id => this.client.getCandidateWithApplications(id))
-      );
-    }
-
-    const byBlockerType: Record<BlockerType, Array<{
-      candidate: Candidate;
-      blocker: CandidateBlocker;
-      daysInStage: number;
-    }>> = {
-      no_interview_scheduled: [],
-      awaiting_feedback: [],
-      ready_to_move: [],
-      offer_pending: [],
-      offer_not_sent: [],
-      interview_completed_no_feedback: [],
-      no_blocker: [],
-    };
-
-    const urgentCandidates: Array<{
-      candidate: Candidate;
-      blocker: CandidateBlocker;
-      priority: CandidatePriority;
-    }> = [];
-
-    let criticalCount = 0;
-    let warningCount = 0;
-    let infoCount = 0;
-
-    // Analyze each candidate
-    for (const { candidate, applications } of candidates) {
-      const activeApp = applications.find(a => a.status === "Active");
-      if (!activeApp) continue;
-
-      try {
-        const analysis = await this.analyzeCandidateStatus(candidate.id);
-
-        // Categorize by blocker type
-        if (analysis.blockers.length > 0) {
-          const primaryBlocker = analysis.blockers[0]!; // Most severe blocker (guaranteed to exist)
-          byBlockerType[primaryBlocker.type].push({
-            candidate,
-            blocker: primaryBlocker,
-            daysInStage: analysis.daysInStage,
-          });
-
-          // Count by severity
-          if (primaryBlocker.severity === "critical") criticalCount++;
-          else if (primaryBlocker.severity === "warning") warningCount++;
-          else infoCount++;
-
-          // Track urgent candidates
-          if (analysis.priority === "urgent" || analysis.priority === "high") {
-            urgentCandidates.push({
-              candidate,
-              blocker: primaryBlocker,
-              priority: analysis.priority,
-            });
-          }
-        } else {
-          // No blockers
-          byBlockerType.no_blocker.push({
-            candidate,
-            blocker: {
-              type: "no_blocker",
-              severity: "info",
-              message: "On track",
-              suggestedAction: "Continue monitoring",
-            },
-            daysInStage: analysis.daysInStage,
-          });
-          infoCount++;
-        }
-      } catch (error) {
-        // Skip candidates we can't analyze
-        console.error(`Failed to analyze candidate ${candidate.id}:`, error);
-      }
-    }
-
-    // Sort urgent candidates by priority
-    urgentCandidates.sort((a, b) => {
-      const priorityOrder: Record<CandidatePriority, number> = {
-        urgent: 0,
-        high: 1,
-        medium: 2,
-        low: 3,
-      };
-      return priorityOrder[a.priority] - priorityOrder[b.priority];
-    });
-
-    return {
-      analyzed: candidates.length,
-      byBlockerType,
-      summary: {
-        critical: criticalCount,
-        warning: warningCount,
-        info: infoCount,
-      },
-      urgentCandidates,
-    };
+  analyzeCandidateBlockers(candidateIds?: string[]): Promise<BatchBlockerAnalysis> {
+    return this.analysisService.analyzeCandidateBlockers(candidateIds);
   }
 
   // ===========================================================================
-  // Private Analysis Helpers
+  // User Management
   // ===========================================================================
 
-  private detectBlockers(context: {
-    currentStage: InterviewStage;
-    daysInStage: number;
-    upcomingInterviews: Interview[];
-    completedInterviewsWithoutFeedback: Interview[];
-    feedbackSubmissions: FeedbackSubmission[];
-    pendingOffer?: Offer;
-    application: Application;
-  }): CandidateBlocker[] {
-    const blockers: CandidateBlocker[] = [];
-    const { currentStage, daysInStage, upcomingInterviews, completedInterviewsWithoutFeedback, pendingOffer } = context;
-
-    // Check if stage name suggests interviews are needed
-    const stageNeedsInterview = currentStage.title.toLowerCase().includes("interview") ||
-      currentStage.title.toLowerCase().includes("screen");
-
-    // Blocker 1: In interview stage but no interviews scheduled
-    if (stageNeedsInterview && upcomingInterviews.length === 0 && completedInterviewsWithoutFeedback.length === 0) {
-      blockers.push({
-        type: "no_interview_scheduled",
-        severity: daysInStage > 7 ? "critical" : "warning",
-        message: `In ${currentStage.title} for ${daysInStage} days but no interview scheduled`,
-        suggestedAction: `Schedule ${currentStage.title.toLowerCase()} with appropriate interviewers`,
-        daysStuck: daysInStage,
-      });
-    }
-
-    // Blocker 2: Completed interviews without feedback
-    if (completedInterviewsWithoutFeedback.length > 0) {
-      const sortedInterviews = [...completedInterviewsWithoutFeedback]
-        .sort((a, b) => new Date(a.scheduledStartTime!).getTime() - new Date(b.scheduledStartTime!).getTime());
-      const oldestInterview = sortedInterviews[0];
-      if (oldestInterview && oldestInterview.scheduledStartTime) {
-        const daysSinceInterview = Math.floor((Date.now() - new Date(oldestInterview.scheduledStartTime).getTime()) / (1000 * 60 * 60 * 24));
-
-        blockers.push({
-          type: "interview_completed_no_feedback",
-          severity: daysSinceInterview > 5 ? "critical" : "warning",
-          message: `${completedInterviewsWithoutFeedback.length} interview(s) completed but no feedback yet (oldest: ${daysSinceInterview} days ago)`,
-          suggestedAction: "Follow up with interviewers for feedback",
-          daysStuck: daysSinceInterview,
-        });
-      }
-    }
-
-    // Blocker 3: In offer stage but no offer exists
-    const stageIsOffer = currentStage.title.toLowerCase().includes("offer");
-    if (stageIsOffer && !pendingOffer) {
-      blockers.push({
-        type: "offer_pending",
-        severity: daysInStage > 3 ? "critical" : "warning",
-        message: `In ${currentStage.title} for ${daysInStage} days but no offer created`,
-        suggestedAction: "Create and send offer to candidate",
-        daysStuck: daysInStage,
-      });
-    }
-
-    // Blocker 4: Offer created but not sent
-    if (pendingOffer && pendingOffer.status === "Approved" && !pendingOffer.sentAt) {
-      const daysSinceApproval = Math.floor((Date.now() - new Date(pendingOffer.updatedAt).getTime()) / (1000 * 60 * 60 * 24));
-      blockers.push({
-        type: "offer_not_sent",
-        severity: daysSinceApproval > 2 ? "critical" : "warning",
-        message: `Offer approved ${daysSinceApproval} days ago but not sent to candidate`,
-        suggestedAction: "Send approved offer to candidate immediately",
-        daysStuck: daysSinceApproval,
-      });
-    }
-
-    // Blocker 5: Stuck in stage for too long (potential ready to move)
-    // TODO: Improve this when feedback API is available
-    if (daysInStage > 14 && !stageIsOffer && completedInterviewsWithoutFeedback.length === 0) {
-      blockers.push({
-        type: "ready_to_move",
-        severity: daysInStage > 21 ? "warning" : "info",
-        message: `In ${currentStage.title} for ${daysInStage} days with no pending items`,
-        suggestedAction: `Review status and consider moving to next stage`,
-        daysStuck: daysInStage,
-      });
-    }
-
-    // Sort by severity (critical first)
-    blockers.sort((a, b) => {
-      const severityOrder: Record<BlockerSeverity, number> = { critical: 0, warning: 1, info: 2 };
-      return severityOrder[a.severity] - severityOrder[b.severity];
-    });
-
-    return blockers;
-  }
-
-  private generateRecentActivity(context: {
-    allInterviews: Interview[];
-    feedbackSubmissions: FeedbackSubmission[];
-    pendingOffer?: Offer;
-  }): RecentActivity[] {
-    const activities: RecentActivity[] = [];
-    const { allInterviews, feedbackSubmissions, pendingOffer } = context;
-
-    // Add recent interviews
-    const recentInterviews = allInterviews
-      .filter(i => i.scheduledStartTime)
-      .sort((a, b) => new Date(b.scheduledStartTime!).getTime() - new Date(a.scheduledStartTime!).getTime())
-      .slice(0, 3);
-
-    for (const interview of recentInterviews) {
-      const isPast = new Date(interview.scheduledStartTime!) < new Date();
-      activities.push({
-        type: "interview",
-        timestamp: interview.scheduledStartTime!,
-        summary: isPast
-          ? `Completed interview`
-          : `Upcoming interview`,
-      });
-    }
-
-    const recentFeedback = feedbackSubmissions
-      .filter((feedback) => feedback.submittedAt)
-      .sort((a, b) => new Date(b.submittedAt!).getTime() - new Date(a.submittedAt!).getTime())
-      .slice(0, 3);
-
-    for (const feedback of recentFeedback) {
-      const submitter = feedback.submittedByUser
-        ? `${feedback.submittedByUser.firstName} ${feedback.submittedByUser.lastName}`.trim()
-        : feedback.submittedBy?.name;
-      activities.push({
-        type: "feedback",
-        timestamp: feedback.submittedAt!,
-        summary: submitter ? `Feedback submitted by ${submitter}` : "Feedback submitted",
-      });
-    }
-
-    // Add offer activity
-    if (pendingOffer) {
-      if (pendingOffer.sentAt) {
-        activities.push({
-          type: "offer",
-          timestamp: pendingOffer.sentAt,
-          summary: `Offer sent (status: ${pendingOffer.status})`,
-        });
-      } else {
-        activities.push({
-          type: "offer",
-          timestamp: pendingOffer.createdAt,
-          summary: `Offer created (status: ${pendingOffer.status})`,
-        });
-      }
-    }
-
-    // Sort by timestamp (most recent first)
-    activities.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-
-    return activities.slice(0, 5); // Return top 5 most recent
-  }
-
-  private generateNextSteps(blockers: CandidateBlocker[], currentStage: InterviewStage): string[] {
-    const steps: string[] = [];
-
-    // Add suggested actions from blockers
-    for (const blocker of blockers) {
-      if (blocker.severity === "critical" || blocker.severity === "warning") {
-        steps.push(blocker.suggestedAction);
-      }
-    }
-
-    // If no critical blockers, suggest general next steps
-    if (steps.length === 0) {
-      steps.push(`Continue with ${currentStage.title} process`);
-      steps.push("Monitor for updates");
-    }
-
-    return steps;
-  }
-
-  private calculatePriority(blockers: CandidateBlocker[], daysInStage: number): CandidatePriority {
-    // Check for critical blockers
-    const hasCritical = blockers.some(b => b.severity === "critical");
-    if (hasCritical) return "urgent";
-
-    // Check for warnings with long delays
-    const hasWarningWithDelay = blockers.some(b =>
-      b.severity === "warning" && (b.daysStuck ?? 0) > 7
-    );
-    if (hasWarningWithDelay) return "high";
-
-    // Check for any warnings
-    const hasWarning = blockers.some(b => b.severity === "warning");
-    if (hasWarning) return "medium";
-
-    // Check if candidate is just generally stale
-    if (daysInStage > this.staleDays) return "medium";
-
-    return "low";
-  }
-
-  // ===========================================================================
-  // Sources & Hiring Team (Phase 3C)
-  // ===========================================================================
-
-  async listSources(): Promise<Array<{ id: string; title: string }>> {
-    return this.client.listSources();
-  }
-
-  async listHiringTeamRoles(): Promise<Array<{ id: string; label: string }>> {
-    return this.client.listHiringTeamRoles();
-  }
-
-  async getApplicationHiringTeam(applicationId: string): Promise<Array<{
-    userId: string;
-    roleId: string;
-    role: { id: string; label: string };
-  }>> {
-    return this.client.listApplicationHiringTeam(applicationId);
-  }
-
-  // ===========================================================================
-  // User Management (Phase 3C)
-  // ===========================================================================
-
-  async getUserDetails(userId: string): Promise<User> {
+  getUserDetails(userId: string): Promise<User> {
     return this.client.getUser(userId);
   }
 
-  async searchUsers(params: { name?: string; email?: string }): Promise<User[]> {
+  searchUsers(params: { name?: string; email?: string }): Promise<User[]> {
     return this.client.searchUsers(params);
-  }
-
-  // ===========================================================================
-  // Feedback & Custom Fields (Phase 3D/3E)
-  // ===========================================================================
-
-  async getFeedbackDetails(feedbackSubmissionId: string): Promise<FeedbackSubmission> {
-    try {
-      const submission = await this.client.getFeedbackSubmission(feedbackSubmissionId);
-      if (!submission.fieldSubmissions || submission.fieldSubmissions.length === 0) {
-        submission.fieldSubmissions = this.buildFieldSubmissions(submission);
-      }
-      if (submission.id) {
-        this.feedbackSubmissionCache.set(submission.id, submission);
-      }
-      return submission;
-    } catch (error) {
-      if (error instanceof AshbyApiError && error.statusCode === 404) {
-        const cached = this.feedbackSubmissionCache.get(feedbackSubmissionId);
-        if (cached) {
-          if (!cached.fieldSubmissions || cached.fieldSubmissions.length === 0) {
-            cached.fieldSubmissions = this.buildFieldSubmissions(cached);
-          }
-          return cached;
-        }
-      }
-      throw error;
-    }
-  }
-
-  async listCustomFields(): Promise<Array<{ id: string; title: string; fieldType: string }>> {
-    return this.client.listCustomFields();
-  }
-
-  // ===========================================================================
-  // Enhanced Context (Phase 3G)
-  // ===========================================================================
-
-  async listLocations(): Promise<Array<{ id: string; name: string }>> {
-    return this.client.listLocations();
-  }
-
-  async listDepartments(): Promise<Array<{ id: string; name: string }>> {
-    return this.client.listDepartments();
-  }
-
-  async getApplicationHistory(applicationId: string): Promise<Array<Record<string, unknown>>> {
-    return this.client.getApplicationHistory(applicationId);
-  }
-
-  async getInterviewStageDetails(interviewStageId: string): Promise<InterviewStage | null> {
-    // Use the existing method that fetches from cached list
-    return this.client.getInterviewStage(interviewStageId);
-  }
-
-  async listInterviewEvents(interviewScheduleId?: string): Promise<InterviewEvent[]> {
-    return this.client.listInterviewEvents(interviewScheduleId);
   }
 }
