@@ -489,6 +489,27 @@ export interface PrepPacket {
 }
 
 /**
+ * Interview briefing with resume URL for Slack users.
+ * Extended version of PrepPacket with additional context for interviewers.
+ */
+export interface InterviewBriefing extends PrepPacket {
+  /** Direct download URL for the candidate's resume (null if no resume on file) */
+  resumeUrl: string | null;
+  /** The interview stage name (e.g., "Technical Interview", "Culture Fit") */
+  interviewStageName: string | null;
+  /** Scheduled interview start time (ISO 8601) */
+  scheduledTime: string | null;
+  /** Scheduled interview end time (ISO 8601) */
+  scheduledEndTime: string | null;
+  /** Meeting link (Zoom, Google Meet, etc.) if available */
+  meetingLink: string | null;
+  /** Location if in-person */
+  location: string | null;
+  /** List of interviewer names */
+  interviewerNames: string[];
+}
+
+/**
  * Triage session for bulk candidate review
  */
 export interface TriageSession {

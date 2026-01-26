@@ -64,6 +64,8 @@ interface ToolInput {
   application_id?: string;
   // Phase 3D/3E/3G: Feedback, custom fields, enhanced context
   feedback_submission_id?: string;
+  // Interview briefing
+  interviewer_email?: string;
 }
 
 export class ToolExecutor {
@@ -744,6 +746,84 @@ export class ToolExecutor {
         }
         const context = await this.ashby.getCandidateFullContext(candidateId);
         return { success: true, data: context };
+      }
+
+      case "get_candidate_resume": {
+        const candidateId = await this.resolveReadableCandidateId(input);
+        if (!candidateId) {
+          return {
+            success: false,
+            error: "Could not identify candidate. Please provide a name, email, or candidate ID.",
+          };
+        }
+        const resumeData = await this.ashby.getResumeUrl(candidateId);
+        if (!resumeData) {
+          return {
+            success: true,
+            data: {
+              hasResume: false,
+              message: "This candidate does not have a resume on file.",
+            },
+          };
+        }
+        return {
+          success: true,
+          data: {
+            hasResume: true,
+            url: resumeData.url,
+            candidateName: resumeData.candidateName,
+            message: `Resume for ${resumeData.candidateName} is ready for download.`,
+          },
+        };
+      }
+
+      case "get_interview_briefing": {
+        // Two modes:
+        // 1. With interviewer_email - find their upcoming interview
+        // 2. With candidate_id/name_or_email - get briefing for specific candidate
+        if (input.interviewer_email) {
+          const briefing = await this.ashby.getInterviewBriefing(
+            input.interviewer_email,
+            input.candidate_name
+          );
+          if (!briefing) {
+            return {
+              success: false,
+              error: input.candidate_name
+                ? `No upcoming interview found with a candidate named "${input.candidate_name}". Make sure the name matches and the interview is scheduled in Ashby.`
+                : "No upcoming interviews found for this user. Make sure the email matches your Ashby account and you have scheduled interviews.",
+            };
+          }
+          return {
+            success: true,
+            data: {
+              briefing,
+              message: `Interview briefing ready for ${briefing.candidate.name}`,
+            },
+          };
+        }
+
+        // Fallback: use candidate_id or name_or_email
+        const candidateId = await this.resolveReadableCandidateId(input);
+        if (!candidateId) {
+          return {
+            success: false,
+            error:
+              "Please provide either your email (interviewer_email) to find your upcoming interview, or provide candidate_id/name_or_email to get a briefing for a specific candidate.",
+          };
+        }
+
+        const briefing = await this.ashby.getInterviewBriefingForCandidate(
+          candidateId,
+          input.application_id
+        );
+        return {
+          success: true,
+          data: {
+            briefing,
+            message: `Interview briefing ready for ${briefing.candidate.name}`,
+          },
+        };
       }
 
       case "get_open_jobs": {

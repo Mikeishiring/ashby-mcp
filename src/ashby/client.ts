@@ -1010,6 +1010,21 @@ export class AshbyClient {
     return response.applicationHistory;
   }
 
+  // ===========================================================================
+  // Files
+  // ===========================================================================
+
+  /**
+   * Get the download URL for a file by its handle.
+   * Used primarily for retrieving resume files.
+   */
+  async getFileUrl(fileHandle: string): Promise<string> {
+    const response = await this.request<{ url: string }>("file.info", {
+      fileHandle,
+    });
+    return response.url;
+  }
+
   async listInterviewEvents(
     interviewScheduleId?: string
   ): Promise<InterviewEvent[]> {

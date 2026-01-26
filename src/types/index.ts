@@ -100,6 +100,7 @@ export interface DailySummaryData {
     stage: string;
     job: string;
     daysInStage: number;
+    profileUrl: string;
   }>;
   needsDecision: Array<{
     name: string;
@@ -107,6 +108,7 @@ export interface DailySummaryData {
     stage: string;
     job: string;
     daysWaiting: number;
+    profileUrl: string;
   }>;
   stats: {
     totalActive: number;

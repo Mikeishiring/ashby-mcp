@@ -37,6 +37,28 @@ export class CandidateService {
     return this.client.listCandidateTags();
   }
 
+  /**
+   * Get the resume download URL for a candidate.
+   * Returns null if the candidate doesn't have a resume on file.
+   */
+  async getResumeUrl(candidateId: string): Promise<{
+    url: string;
+    candidateName: string;
+  } | null> {
+    const candidate = await this.client.getCandidate(candidateId);
+
+    if (!candidate.resumeFileHandle) {
+      return null;
+    }
+
+    const url = await this.client.getFileUrl(candidate.resumeFileHandle);
+
+    return {
+      url,
+      candidateName: candidate.name,
+    };
+  }
+
   async isHiredCandidate(candidateId: string): Promise<boolean> {
     const { applications } = await this.client.getCandidateWithApplications(candidateId);
 

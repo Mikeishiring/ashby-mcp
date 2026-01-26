@@ -16,6 +16,8 @@ const createMockClient = (): Partial<AshbyClient> => ({
   updateCandidate: vi.fn(),
   addCandidateTag: vi.fn(),
   listCandidateTags: vi.fn(),
+  getCandidate: vi.fn(),
+  getFileUrl: vi.fn(),
 });
 
 const createMockCandidate = (overrides?: Partial<Candidate>): Candidate => ({
@@ -244,6 +246,43 @@ describe("CandidateService", () => {
       const result = await service.isHiredCandidate("c-1");
 
       expect(result).toBe(true);
+    });
+  });
+
+  describe("getResumeUrl", () => {
+    it("should return resume URL for candidate with resume", async () => {
+      const candidate = createMockCandidate({
+        resumeFileHandle: "file-handle-123",
+      });
+      vi.mocked(mockClient.getCandidate!).mockResolvedValue(candidate);
+      vi.mocked(mockClient.getFileUrl!).mockResolvedValue("https://files.ashby.com/resume.pdf");
+
+      const result = await service.getResumeUrl("c-1");
+
+      expect(result).toEqual({
+        url: "https://files.ashby.com/resume.pdf",
+        candidateName: "John Doe",
+      });
+      expect(mockClient.getCandidate).toHaveBeenCalledWith("c-1");
+      expect(mockClient.getFileUrl).toHaveBeenCalledWith("file-handle-123");
+    });
+
+    it("should return null for candidate without resume", async () => {
+      const candidate = createMockCandidate();
+      // Remove resumeFileHandle to simulate no resume
+      delete (candidate as any).resumeFileHandle;
+      vi.mocked(mockClient.getCandidate!).mockResolvedValue(candidate);
+
+      const result = await service.getResumeUrl("c-1");
+
+      expect(result).toBeNull();
+      expect(mockClient.getFileUrl).not.toHaveBeenCalled();
+    });
+
+    it("should propagate errors from API", async () => {
+      vi.mocked(mockClient.getCandidate!).mockRejectedValue(new Error("Candidate not found"));
+
+      await expect(service.getResumeUrl("c-1")).rejects.toThrow("Candidate not found");
     });
   });
 });

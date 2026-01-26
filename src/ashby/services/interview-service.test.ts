@@ -19,6 +19,7 @@ const createMockClient = (): Partial<AshbyClient> => ({
   cancelInterviewSchedule: vi.fn(),
   listInterviewEvents: vi.fn(),
   getCandidateWithApplications: vi.fn(),
+  getApplication: vi.fn(),
 });
 
 const createMockSearchService = (): Partial<SearchService> => ({
@@ -107,6 +108,197 @@ describe("InterviewService", () => {
 
       expect(result).toHaveLength(1);
       expect(result[0]!.email).toBe("john@example.com");
+    });
+  });
+
+  describe("getUserByEmail", () => {
+    it("should find user by exact email match", async () => {
+      const users: User[] = [
+        { id: "u1", email: "john@example.com", firstName: "John", lastName: "Doe", globalRole: "Interviewer", isEnabled: true },
+        { id: "u2", email: "jane@example.com", firstName: "Jane", lastName: "Smith", globalRole: "Admin", isEnabled: true },
+      ];
+      vi.mocked(mockClient.listUsers!).mockResolvedValue(users);
+
+      const result = await service.getUserByEmail("jane@example.com");
+
+      expect(result).not.toBeNull();
+      expect(result!.id).toBe("u2");
+      expect(result!.firstName).toBe("Jane");
+    });
+
+    it("should be case-insensitive", async () => {
+      const users: User[] = [
+        { id: "u1", email: "John@Example.COM", firstName: "John", lastName: "Doe", globalRole: "Interviewer", isEnabled: true },
+      ];
+      vi.mocked(mockClient.listUsers!).mockResolvedValue(users);
+
+      const result = await service.getUserByEmail("john@example.com");
+
+      expect(result).not.toBeNull();
+      expect(result!.id).toBe("u1");
+    });
+
+    it("should return null if no user found", async () => {
+      const users: User[] = [
+        { id: "u1", email: "john@example.com", firstName: "John", lastName: "Doe", globalRole: "Interviewer", isEnabled: true },
+      ];
+      vi.mocked(mockClient.listUsers!).mockResolvedValue(users);
+
+      const result = await service.getUserByEmail("unknown@example.com");
+
+      expect(result).toBeNull();
+    });
+  });
+
+  describe("getUpcomingInterviewsForUser", () => {
+    const futureDate = new Date(Date.now() + 86400000).toISOString(); // Tomorrow
+    const pastDate = new Date(Date.now() - 86400000).toISOString(); // Yesterday
+
+    it("should return upcoming interviews for user", async () => {
+      const interviews: Interview[] = [
+        {
+          id: "int-1",
+          applicationId: "app-1",
+          interviewStageId: "stage-1",
+          status: "Scheduled",
+          scheduledStartTime: futureDate,
+          feedbackSubmissions: [],
+          interviewers: [],
+        },
+      ];
+      vi.mocked(mockClient.listInterviews!).mockResolvedValue(interviews);
+
+      const result = await service.getUpcomingInterviewsForUser("u1");
+
+      expect(result).toHaveLength(1);
+      expect(result[0]!.id).toBe("int-1");
+      expect(mockClient.listInterviews).toHaveBeenCalledWith({
+        userId: "u1",
+        startDate: expect.any(String),
+      });
+    });
+
+    it("should filter out past interviews", async () => {
+      const interviews: Interview[] = [
+        {
+          id: "int-past",
+          applicationId: "app-1",
+          interviewStageId: "stage-1",
+          status: "Completed",
+          scheduledStartTime: pastDate,
+          feedbackSubmissions: [],
+          interviewers: [],
+        },
+        {
+          id: "int-future",
+          applicationId: "app-2",
+          interviewStageId: "stage-1",
+          status: "Scheduled",
+          scheduledStartTime: futureDate,
+          feedbackSubmissions: [],
+          interviewers: [],
+        },
+      ];
+      vi.mocked(mockClient.listInterviews!).mockResolvedValue(interviews);
+
+      const result = await service.getUpcomingInterviewsForUser("u1");
+
+      expect(result).toHaveLength(1);
+      expect(result[0]!.id).toBe("int-future");
+    });
+
+    it("should sort by scheduled time", async () => {
+      const soonDate = new Date(Date.now() + 3600000).toISOString(); // 1 hour
+      const laterDate = new Date(Date.now() + 86400000).toISOString(); // Tomorrow
+      const interviews: Interview[] = [
+        {
+          id: "int-later",
+          applicationId: "app-1",
+          interviewStageId: "stage-1",
+          status: "Scheduled",
+          scheduledStartTime: laterDate,
+          feedbackSubmissions: [],
+          interviewers: [],
+        },
+        {
+          id: "int-soon",
+          applicationId: "app-2",
+          interviewStageId: "stage-1",
+          status: "Scheduled",
+          scheduledStartTime: soonDate,
+          feedbackSubmissions: [],
+          interviewers: [],
+        },
+      ];
+      vi.mocked(mockClient.listInterviews!).mockResolvedValue(interviews);
+
+      const result = await service.getUpcomingInterviewsForUser("u1");
+
+      expect(result).toHaveLength(2);
+      expect(result[0]!.id).toBe("int-soon");
+      expect(result[1]!.id).toBe("int-later");
+    });
+
+    it("should filter by candidate name when provided", async () => {
+      const candidate = createMockCandidate({ name: "Alice Johnson" });
+      const application = createMockApplication({ candidate });
+      const interviews: Interview[] = [
+        {
+          id: "int-1",
+          applicationId: "app-1",
+          interviewStageId: "stage-1",
+          status: "Scheduled",
+          scheduledStartTime: futureDate,
+          feedbackSubmissions: [],
+          interviewers: [],
+        },
+      ];
+      vi.mocked(mockClient.listInterviews!).mockResolvedValue(interviews);
+      vi.mocked(mockClient.getApplication!).mockResolvedValue(application);
+
+      const result = await service.getUpcomingInterviewsForUser("u1", { candidateName: "alice" });
+
+      expect(result).toHaveLength(1);
+      expect(result[0]!.id).toBe("int-1");
+    });
+
+    it("should filter out non-matching candidates when candidate name provided", async () => {
+      const candidate = createMockCandidate({ name: "Bob Smith" });
+      const application = createMockApplication({ candidate });
+      const interviews: Interview[] = [
+        {
+          id: "int-1",
+          applicationId: "app-1",
+          interviewStageId: "stage-1",
+          status: "Scheduled",
+          scheduledStartTime: futureDate,
+          feedbackSubmissions: [],
+          interviewers: [],
+        },
+      ];
+      vi.mocked(mockClient.listInterviews!).mockResolvedValue(interviews);
+      vi.mocked(mockClient.getApplication!).mockResolvedValue(application);
+
+      const result = await service.getUpcomingInterviewsForUser("u1", { candidateName: "alice" });
+
+      expect(result).toHaveLength(0);
+    });
+
+    it("should respect limit option", async () => {
+      const interviews: Interview[] = Array(5).fill(null).map((_, i) => ({
+        id: `int-${i}`,
+        applicationId: `app-${i}`,
+        interviewStageId: "stage-1",
+        status: "Scheduled" as const,
+        scheduledStartTime: new Date(Date.now() + (i + 1) * 3600000).toISOString(),
+        feedbackSubmissions: [],
+        interviewers: [],
+      }));
+      vi.mocked(mockClient.listInterviews!).mockResolvedValue(interviews);
+
+      const result = await service.getUpcomingInterviewsForUser("u1", { limit: 3 });
+
+      expect(result).toHaveLength(3);
     });
   });
 

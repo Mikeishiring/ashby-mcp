@@ -124,6 +124,51 @@ export const ashbyTools: Tool[] = [
       required: [],
     },
   },
+  {
+    name: "get_candidate_resume",
+    description:
+      "Get the resume download URL for a candidate. Returns a direct link to download the resume PDF. The URL is temporary and should be shared immediately.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        candidate_id: {
+          type: "string",
+          description: "The candidate ID",
+        },
+        name_or_email: {
+          type: "string",
+          description: "Name or email to search for (if candidate_id not known)",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_interview_briefing",
+    description:
+      "Get a comprehensive interview briefing for the requesting user. Call this when someone says they have an interview or call with a candidate. Returns resume URL, notes, prior feedback, and interview context. Requires the user's email to match with their Ashby account.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        interviewer_email: {
+          type: "string",
+          description:
+            "The email of the interviewer (use Slack user's email). Required to match with Ashby user.",
+        },
+        candidate_name: {
+          type: "string",
+          description:
+            "Optional: the candidate's first name or full name to find a specific interview",
+        },
+        candidate_id: {
+          type: "string",
+          description:
+            "Optional: if you already know the candidate ID, use this instead of candidate_name",
+        },
+      },
+      required: [],
+    },
+  },
 
   // ===========================================================================
   // Job Tools
@@ -1172,6 +1217,7 @@ export function getToolNames(category?: "read" | "write"): string[] {
     "search_candidates",
     "get_candidates_for_job",
     "get_candidate_details",
+    "get_candidate_resume",
     "get_open_jobs",
     "get_job_details",
     "list_interview_plans",

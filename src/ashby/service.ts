@@ -35,6 +35,7 @@ import type {
   DailySummaryData,
   FeedbackSubmission,
   Interview,
+  InterviewBriefing,
   InterviewEvent,
   InterviewPlan,
   InterviewSchedule,
@@ -155,6 +156,17 @@ export class AshbyService {
 
   isHiredCandidate(candidateId: string): Promise<boolean> {
     return this.candidateService.isHiredCandidate(candidateId);
+  }
+
+  /**
+   * Get the resume download URL for a candidate.
+   * Returns null if the candidate doesn't have a resume on file.
+   */
+  getResumeUrl(candidateId: string): Promise<{
+    url: string;
+    candidateName: string;
+  } | null> {
+    return this.candidateService.getResumeUrl(candidateId);
   }
 
   // ===========================================================================
@@ -287,6 +299,17 @@ export class AshbyService {
 
   listUsers(): Promise<User[]> {
     return this.interviewService.listUsers();
+  }
+
+  getUserByEmail(email: string): Promise<User | null> {
+    return this.interviewService.getUserByEmail(email);
+  }
+
+  getUpcomingInterviewsForUser(
+    userId: string,
+    options?: { candidateName?: string; limit?: number }
+  ): Promise<Interview[]> {
+    return this.interviewService.getUpcomingInterviewsForUser(userId, options);
   }
 
   getInterviewSchedulesForCandidate(candidateId: string): Promise<InterviewSchedule[]> {
@@ -466,6 +489,20 @@ export class AshbyService {
     applicationId?: string
   ): Promise<PrepPacket> {
     return this.analyticsService.getInterviewPrepPacket(candidateId, applicationId);
+  }
+
+  getInterviewBriefing(
+    interviewerEmail: string,
+    candidateName?: string
+  ): Promise<InterviewBriefing | null> {
+    return this.analyticsService.getInterviewBriefing(interviewerEmail, candidateName);
+  }
+
+  getInterviewBriefingForCandidate(
+    candidateId: string,
+    applicationId?: string
+  ): Promise<InterviewBriefing> {
+    return this.analyticsService.getInterviewBriefingForCandidate(candidateId, applicationId);
   }
 
   // ===========================================================================

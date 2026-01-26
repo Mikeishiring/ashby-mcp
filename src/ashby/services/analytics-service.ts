@@ -13,6 +13,8 @@ import type {
   Application,
   CandidateComparison,
   CandidateWithContext,
+  Interview,
+  InterviewBriefing,
   Job,
   PrepPacket,
   SourceAnalytics,
@@ -204,5 +206,125 @@ export class AnalyticsService {
       notes,
       profileUrl: candidate.profileUrl,
     };
+  }
+
+  /**
+   * Get a comprehensive interview briefing for an interviewer.
+   * This is designed for the "@ashby I have an interview with [name]" use case.
+   *
+   * @param interviewerEmail - The email of the interviewer (typically from Slack user lookup)
+   * @param candidateName - Optional candidate name to filter by
+   * @returns Interview briefing with resume, notes, context, and interview details
+   */
+  async getInterviewBriefing(
+    interviewerEmail: string,
+    candidateName?: string
+  ): Promise<InterviewBriefing | null> {
+    // Step 1: Find the Ashby user by email
+    const user = await this.interviewService.getUserByEmail(interviewerEmail);
+    if (!user) {
+      return null;
+    }
+
+    // Step 2: Find their upcoming interviews (optionally filtered by candidate name)
+    const options: { candidateName?: string; limit?: number } = { limit: 1 };
+    if (candidateName) {
+      options.candidateName = candidateName;
+    }
+    const upcomingInterviews = await this.interviewService.getUpcomingInterviewsForUser(
+      user.id,
+      options
+    );
+
+    if (upcomingInterviews.length === 0) {
+      return null;
+    }
+
+    const interview = upcomingInterviews[0]!;
+
+    // Step 3: Get the application and candidate info
+    const application = await this.client.getApplication(interview.applicationId);
+    if (!application.candidate) {
+      return null;
+    }
+
+    const candidateId = application.candidateId;
+
+    // Step 4: Fetch prep packet and resume URL in parallel for performance
+    const [prepPacket, resumeData] = await Promise.all([
+      this.getInterviewPrepPacket(candidateId, interview.applicationId),
+      this.candidateService.getResumeUrl(candidateId).catch(() => null),
+    ]);
+
+    // Step 5: Build the full briefing with interview-specific details
+    return this.buildInterviewBriefing(prepPacket, interview, resumeData?.url ?? null);
+  }
+
+  /**
+   * Get an interview briefing by candidate name or ID.
+   * Alternative to getInterviewBriefing when you don't have interviewer context.
+   *
+   * @param candidateId - The candidate ID
+   * @param applicationId - Optional specific application ID
+   */
+  async getInterviewBriefingForCandidate(
+    candidateId: string,
+    applicationId?: string
+  ): Promise<InterviewBriefing> {
+    // Fetch prep packet and resume URL in parallel for performance
+    const [prepPacket, resumeData] = await Promise.all([
+      this.getInterviewPrepPacket(candidateId, applicationId),
+      this.candidateService.getResumeUrl(candidateId).catch(() => null),
+    ]);
+
+    // Build briefing from upcoming interview event if available
+    const upcomingEvent = prepPacket.upcomingInterview;
+
+    return {
+      ...prepPacket,
+      resumeUrl: resumeData?.url ?? null,
+      interviewStageName: upcomingEvent?.title ?? null,
+      scheduledTime: upcomingEvent?.startTime ?? null,
+      scheduledEndTime: upcomingEvent?.endTime ?? null,
+      meetingLink: upcomingEvent?.meetingLink ?? null,
+      location: upcomingEvent?.location ?? null,
+      interviewerNames: this.extractInterviewerNames(upcomingEvent?.interviewers),
+    };
+  }
+
+  /**
+   * Build an InterviewBriefing from a PrepPacket and Interview data.
+   * Extracts all relevant interview details including meeting info and interviewers.
+   */
+  private buildInterviewBriefing(
+    prepPacket: PrepPacket,
+    interview: Interview,
+    resumeUrl: string | null
+  ): InterviewBriefing {
+    // Get interviewer names from the interview record
+    const interviewerNames = interview.interviewers
+      .map((i) => i.user ? `${i.user.firstName} ${i.user.lastName}` : null)
+      .filter((name): name is string => name !== null);
+
+    return {
+      ...prepPacket,
+      resumeUrl,
+      interviewStageName: interview.interviewStage?.title ?? null,
+      scheduledTime: interview.scheduledStartTime ?? null,
+      scheduledEndTime: interview.scheduledEndTime ?? null,
+      // Interview doesn't have meetingLink directly, but InterviewEvent does
+      // We'll use the upcoming interview event if available, otherwise null
+      meetingLink: prepPacket.upcomingInterview?.meetingLink ?? null,
+      location: prepPacket.upcomingInterview?.location ?? null,
+      interviewerNames,
+    };
+  }
+
+  /**
+   * Extract interviewer names from User array.
+   */
+  private extractInterviewerNames(interviewers?: Array<{ firstName: string; lastName: string }>): string[] {
+    if (!interviewers) return [];
+    return interviewers.map((u) => `${u.firstName} ${u.lastName}`);
   }
 }

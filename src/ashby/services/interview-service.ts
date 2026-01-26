@@ -29,6 +29,61 @@ export class InterviewService {
     return this.client.listUsers();
   }
 
+  /**
+   * Find an Ashby user by their email address.
+   * Useful for mapping Slack users to Ashby users.
+   */
+  async getUserByEmail(email: string): Promise<User | null> {
+    const users = await this.client.listUsers();
+    const normalizedEmail = email.toLowerCase();
+    return users.find((u) => u.email.toLowerCase() === normalizedEmail) ?? null;
+  }
+
+  /**
+   * Get upcoming interviews for a specific user (interviewer).
+   * Optionally filter by candidate name to find a specific interview.
+   */
+  async getUpcomingInterviewsForUser(
+    userId: string,
+    options?: { candidateName?: string; limit?: number }
+  ): Promise<Interview[]> {
+    const now = new Date().toISOString();
+    const allInterviews = await this.client.listInterviews({
+      userId,
+      startDate: now,
+    });
+
+    let interviews = allInterviews
+      .filter((i) => i.scheduledStartTime && new Date(i.scheduledStartTime) > new Date())
+      .sort((a, b) => {
+        if (!a.scheduledStartTime || !b.scheduledStartTime) return 0;
+        return new Date(a.scheduledStartTime).getTime() - new Date(b.scheduledStartTime).getTime();
+      });
+
+    // Filter by candidate name if provided
+    if (options?.candidateName) {
+      const searchTerm = options.candidateName.toLowerCase();
+      // We need to get application info to filter by candidate
+      // This is expensive, so only do it if a name is provided
+      const interviewsWithCandidate = await Promise.all(
+        interviews.map(async (interview) => {
+          try {
+            const application = await this.client.getApplication(interview.applicationId);
+            const candidate = application.candidate;
+            if (!candidate) return null;
+            const nameMatch = candidate.name.toLowerCase().includes(searchTerm);
+            return nameMatch ? interview : null;
+          } catch {
+            return null;
+          }
+        })
+      );
+      interviews = interviewsWithCandidate.filter((i): i is Interview => i !== null);
+    }
+
+    return interviews.slice(0, options?.limit ?? 10);
+  }
+
   async getInterviewSchedulesForCandidate(candidateId: string): Promise<InterviewSchedule[]> {
     const { applications } = await this.client.getCandidateWithApplications(candidateId);
 

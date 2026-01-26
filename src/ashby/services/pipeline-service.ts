@@ -177,6 +177,7 @@ export class PipelineService {
         stage: app.currentInterviewStage?.title ?? "Unknown",
         job: app.job?.title ?? "Unknown",
         daysInStage: app.daysInCurrentStage,
+        profileUrl: app.candidate?.profileUrl ?? "",
       })),
       needsDecision: needsDecision.map((app) => ({
         name: app.candidate?.name ?? "Unknown",
@@ -184,6 +185,7 @@ export class PipelineService {
         stage: app.currentInterviewStage?.title ?? "Unknown",
         job: app.job?.title ?? "Unknown",
         daysWaiting: app.daysInCurrentStage,
+        profileUrl: app.candidate?.profileUrl ?? "",
       })),
       stats: {
         totalActive: summary?.totalCandidates ?? 0,
