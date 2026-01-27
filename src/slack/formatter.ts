@@ -367,3 +367,139 @@ export function formatInterviewBriefing(briefing: {
 
   return lines.join("\n");
 }
+
+/**
+ * Format a parsed candidate background/resume for Slack.
+ * Shows expanded profile with work history, education, and skills.
+ */
+export function formatCandidateBackground(background: {
+  candidate: { name: string; email?: string; profileUrl?: string };
+  currentApplication?: {
+    job: string;
+    stage: string;
+    daysInStage: number;
+    status: string;
+  };
+  parsedResume: {
+    summary: string;
+    totalYearsExperience: string;
+    experience: Array<{
+      company: string;
+      title: string;
+      startDate: string;
+      endDate: string | null;
+      duration: string;
+      highlights?: string[];
+    }>;
+    education: Array<{
+      institution: string;
+      degree: string;
+      field?: string;
+      graduationDate?: string;
+    }>;
+    skills: string[];
+  };
+  links: {
+    linkedIn?: string;
+    website?: string;
+    resumeUrl?: string;
+  };
+  notes: Array<{ content: string; createdAt: string }>;
+}): string {
+  const lines: string[] = [];
+  const { candidate, currentApplication, parsedResume, links, notes } = background;
+
+  // Header with candidate name linked to profile
+  const name = formatCandidateName(candidate.name, candidate.profileUrl);
+  lines.push(`:page_facing_up: *${name}*`);
+  if (candidate.email) {
+    lines.push(candidate.email);
+  }
+  lines.push("");
+
+  // Summary
+  if (parsedResume.summary && parsedResume.summary !== "Resume not available or could not be parsed.") {
+    lines.push(`:dart: *Summary*`);
+    lines.push(escapeSlack(parsedResume.summary));
+    lines.push("");
+  }
+
+  // Current application status
+  if (currentApplication) {
+    lines.push(`:chart_with_upwards_trend: *Applying For:* ${escapeSlack(currentApplication.job)}`);
+    lines.push("");
+    lines.push(`*Status*`);
+    lines.push(`• Stage: ${escapeSlack(currentApplication.stage)}`);
+    lines.push(`• Days in stage: ${currentApplication.daysInStage}`);
+    lines.push(`• Status: ${currentApplication.status}`);
+    lines.push("");
+  }
+
+  // Work Experience
+  if (parsedResume.experience.length > 0) {
+    lines.push(`:briefcase: *Experience* (${escapeSlack(parsedResume.totalYearsExperience)} total)`);
+    lines.push("");
+
+    for (const exp of parsedResume.experience) {
+      const endDate = exp.endDate ?? "Present";
+      lines.push(`   *${escapeSlack(exp.company)}*`);
+      lines.push(`   ${escapeSlack(exp.title)}`);
+      lines.push(`   :calendar: ${escapeSlack(exp.startDate)} - ${escapeSlack(endDate)} (${escapeSlack(exp.duration)})`);
+
+      if (exp.highlights && exp.highlights.length > 0) {
+        for (const highlight of exp.highlights.slice(0, 2)) {
+          lines.push(`      • ${escapeSlack(highlight)}`);
+        }
+      }
+      lines.push("");
+    }
+  }
+
+  // Education
+  if (parsedResume.education.length > 0) {
+    lines.push(`:mortar_board: *Education*`);
+    for (const edu of parsedResume.education) {
+      const field = edu.field ? `, ${escapeSlack(edu.field)}` : "";
+      const year = edu.graduationDate ? ` (${escapeSlack(edu.graduationDate)})` : "";
+      lines.push(`   • ${escapeSlack(edu.degree)}${field} - ${escapeSlack(edu.institution)}${year}`);
+    }
+    lines.push("");
+  }
+
+  // Skills (compact format)
+  if (parsedResume.skills.length > 0) {
+    const skillsText = parsedResume.skills.slice(0, 10).map(escapeSlack).join(" • ");
+    lines.push(`:hammer_and_wrench: *Skills*`);
+    lines.push(`   ${skillsText}`);
+    lines.push("");
+  }
+
+  // Links
+  const hasLinks = links.linkedIn || links.website || links.resumeUrl;
+  if (hasLinks) {
+    lines.push(`:link: *Links*`);
+    if (links.linkedIn) {
+      lines.push(`   • <${links.linkedIn}|LinkedIn>`);
+    }
+    if (links.website) {
+      lines.push(`   • <${links.website}|Website>`);
+    }
+    if (links.resumeUrl) {
+      lines.push(`   • <${links.resumeUrl}|Download Resume>`);
+    }
+    lines.push("");
+  }
+
+  // Recent notes
+  if (notes.length > 0) {
+    lines.push(`:memo: *Recent Notes*`);
+    for (const note of notes.slice(0, 3)) {
+      const date = new Date(note.createdAt).toLocaleDateString();
+      const preview =
+        note.content.length > 80 ? note.content.substring(0, 80) + "..." : note.content;
+      lines.push(`   • [${date}] ${escapeSlack(preview)}`);
+    }
+  }
+
+  return lines.join("\n");
+}

@@ -777,6 +777,24 @@ export class ToolExecutor {
         };
       }
 
+      case "get_candidate_background": {
+        const candidateId = await this.resolveReadableCandidateId(input);
+        if (!candidateId) {
+          return {
+            success: false,
+            error: "Could not identify candidate. Please provide a name, email, or candidate ID.",
+          };
+        }
+        const background = await this.ashby.getCandidateBackground(candidateId);
+        return {
+          success: true,
+          data: {
+            background,
+            message: `Background profile for ${background.candidate.name} with ${background.parsedResume.experience.length} work experiences.`,
+          },
+        };
+      }
+
       case "get_interview_briefing": {
         // Two modes:
         // 1. With interviewer_email - find their upcoming interview

@@ -22,6 +22,7 @@ import {
   WriteService,
   type InterviewStats,
 } from "./services/index.js";
+import { ResumeParserService, type CandidateBackground } from "./services/resume-parser-service.js";
 
 // Re-export types for convenience
 import type {
@@ -64,6 +65,7 @@ export class AshbyService {
   private readonly analysisService: AnalysisService;
   private readonly jobService: JobService;
   private readonly writeService: WriteService;
+  private readonly resumeParserService: ResumeParserService;
 
   private readonly client: AshbyClient;
 
@@ -91,6 +93,10 @@ export class AshbyService {
       this.searchService,
       this.pipelineService,
       config.staleDays
+    );
+    this.resumeParserService = new ResumeParserService(
+      this.client,
+      config.anthropic.apiKey
     );
   }
 
@@ -168,6 +174,19 @@ export class AshbyService {
     candidateName: string;
   } | null> {
     return this.candidateService.getResumeUrl(candidateId);
+  }
+
+  /**
+   * Get comprehensive candidate background with parsed resume data.
+   * Downloads and parses the resume PDF to extract structured work history.
+   */
+  async getCandidateBackground(candidateId: string): Promise<CandidateBackground> {
+    const context = await this.candidateService.getCandidateFullContext(candidateId);
+    return this.resumeParserService.getCandidateBackground(
+      context.candidate,
+      context.applications,
+      context.notes
+    );
   }
 
   // ===========================================================================

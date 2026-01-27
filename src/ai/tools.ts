@@ -71,7 +71,7 @@ export const ashbyTools: Tool[] = [
   {
     name: "search_candidates",
     description:
-      "Search for candidates by name or email. Use this when looking for a specific person.",
+      "Search for candidates by name or email. Returns up to 10 matching candidates with their email and current stage. If multiple results, present the top matches and ask which one. Use partial names (e.g., 'Sarah') or email domains for broader searches.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -85,7 +85,7 @@ export const ashbyTools: Tool[] = [
   },
   {
     name: "get_candidates_for_job",
-    description: "Get all active candidates for a specific job/role.",
+    description: "Get all active candidates for a specific job/role. Returns candidates with their current stage and days in stage. Use this when asked 'who's in the pipeline for X' or 'show me DevOps candidates'.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -108,7 +108,7 @@ export const ashbyTools: Tool[] = [
   {
     name: "get_candidate_details",
     description:
-      "Get full details about a specific candidate including their applications, current stage, and notes.",
+      "Get a quick status overview for a candidate: current stage, applications, and recent notes. Use this for 'who is X' questions or status checks. For full work history and resume content, use get_candidate_background instead.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -127,7 +127,26 @@ export const ashbyTools: Tool[] = [
   {
     name: "get_candidate_resume",
     description:
-      "Get the resume download URL for a candidate. Returns a direct link to download the resume PDF. The URL is temporary and should be shared immediately.",
+      "Get just the resume download URL for a candidate. Use this only when someone explicitly asks for the download link. For parsed resume content with work history, use get_candidate_background instead. URLs are temporary—share immediately.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        candidate_id: {
+          type: "string",
+          description: "The candidate ID",
+        },
+        name_or_email: {
+          type: "string",
+          description: "Name or email to search for (if candidate_id not known)",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_candidate_background",
+    description:
+      "Get a comprehensive candidate background profile with parsed resume data. Use this when someone asks for a candidate's resume, CV, background, work history, or experience. Downloads the resume PDF, parses it using AI, and returns structured work history with companies, titles, dates, and highlights. Much more informative than just a download link.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -208,7 +227,7 @@ export const ashbyTools: Tool[] = [
   {
     name: "list_interview_plans",
     description:
-      "List all interview plans in the organization. Shows the interview stages for each plan.",
+      "List all interview plans showing the stages each job uses (e.g., Phone Screen → Technical → Onsite → Offer). Use this when asked about interview process structure or 'what stages does the DevOps role have'.",
     input_schema: {
       type: "object" as const,
       properties: {},
@@ -251,7 +270,7 @@ export const ashbyTools: Tool[] = [
   {
     name: "schedule_interview",
     description:
-      "Create an interview schedule for a candidate. Requires interview start/end times and interviewer user IDs (get IDs from get_team_members tool). This action requires confirmation.",
+      "Schedule an interview for a candidate. First call get_team_members to get interviewer user IDs. Provide start/end times in ISO format (e.g., 2026-01-20T14:00:00Z). This action requires confirmation.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -419,7 +438,7 @@ export const ashbyTools: Tool[] = [
   {
     name: "get_rejection_reasons",
     description:
-      "List available rejection/archive reasons. Use this to get reason IDs for the reject_candidate tool.",
+      "List available rejection/archive reasons with their IDs. Call this FIRST before using reject_candidate—you need a reason ID to reject someone. Common reasons: 'Not qualified', 'Position filled', 'Withdrew', etc.",
     input_schema: {
       type: "object" as const,
       properties: {},
@@ -429,7 +448,7 @@ export const ashbyTools: Tool[] = [
   {
     name: "reject_candidate",
     description:
-      "Archive/reject a candidate with a reason. This triggers Ashby's rejection email automation if configured. This action requires confirmation.",
+      "Archive/reject a candidate with a reason. First call get_rejection_reasons to get valid reason IDs. This may trigger Ashby's rejection email automation if configured. This action requires confirmation.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -675,7 +694,7 @@ export const ashbyTools: Tool[] = [
   {
     name: "add_note",
     description:
-      "Add a note to a candidate's profile. Notes are automatically tagged with [via Slack Bot]. This action requires confirmation.",
+      "Add a note to a candidate's profile. Use this to log feedback, observations, or follow-up items. Notes are automatically tagged [via Slack Bot] and visible to the hiring team. This action requires confirmation.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -698,7 +717,7 @@ export const ashbyTools: Tool[] = [
   {
     name: "move_candidate_stage",
     description:
-      "Move a candidate to a different interview stage. This action requires confirmation.",
+      "Move a candidate to a different interview stage (e.g., from 'Phone Screen' to 'Technical Interview'). Use stage names like 'Offer', 'Hired', or 'Rejected'. This action requires confirmation.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -1246,6 +1265,7 @@ export function getToolNames(category?: "read" | "write"): string[] {
     "get_candidates_for_job",
     "get_candidate_details",
     "get_candidate_resume",
+    "get_candidate_background",
     "get_open_jobs",
     "get_job_details",
     "list_interview_plans",
