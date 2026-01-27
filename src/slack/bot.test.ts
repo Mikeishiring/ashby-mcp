@@ -255,7 +255,10 @@ describe("SlackBot", () => {
         say: mockSay,
       });
 
-      expect(mockAgent.processMessage).toHaveBeenCalledWith("show me open jobs");
+      expect(mockAgent.processMessage).toHaveBeenCalledWith("show me open jobs", {
+        userId: "U123",
+        channelId: "C123",
+      });
       expect(mockSay).toHaveBeenCalledWith({
         text: "Here are the jobs!",
         thread_ts: "123.456",

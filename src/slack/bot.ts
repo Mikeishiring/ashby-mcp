@@ -14,6 +14,7 @@ import type { MessageContext, ConfirmableOperationType } from "../types/index.js
 import { getSlackErrorMessage } from "../utils/errors.js";
 import type { WorkflowManager, WorkflowSession } from "../workflows/index.js";
 import type { AshbyService } from "../ashby/index.js";
+import type { UsageTracker } from "../analytics/index.js";
 
 export class SlackBot {
   private readonly app: App;
@@ -23,6 +24,7 @@ export class SlackBot {
   private readonly reminders: ReminderManager | undefined;
   private readonly workflows: WorkflowManager | undefined;
   private readonly ashby: AshbyService | undefined;
+  private readonly usageTracker: UsageTracker | undefined;
 
   constructor(
     config: Config,
@@ -31,7 +33,8 @@ export class SlackBot {
     reminders?: ReminderManager,
     triageSessions?: TriageSessionManager,
     workflows?: WorkflowManager,
-    ashby?: AshbyService
+    ashby?: AshbyService,
+    usageTracker?: UsageTracker
   ) {
     this.app = new App({
       token: config.slack.botToken,
@@ -46,6 +49,7 @@ export class SlackBot {
     this.triageSessions = triageSessions!;
     this.workflows = workflows;
     this.ashby = ashby;
+    this.usageTracker = usageTracker;
 
     this.setupEventHandlers();
   }
@@ -71,6 +75,13 @@ export class SlackBot {
    */
   getClient(): App["client"] {
     return this.app.client;
+  }
+
+  /**
+   * Get usage statistics summary (if tracker is configured)
+   */
+  getUsageStats(): string | null {
+    return this.usageTracker?.getSummary() ?? null;
   }
 
   /**
@@ -191,12 +202,24 @@ export class SlackBot {
     context: MessageContext,
     say: (message: string | object) => Promise<unknown>
   ): Promise<void> {
+    const startTime = Date.now();
+
+    // Track message
+    this.usageTracker?.recordMessage(context.userId);
+
     try {
       // Show typing indicator
       await this.addReactionSafe(context.channelId, context.messageTs, "eyes");
 
-      // Process with Claude
-      const response = await this.agent.processMessage(context.text);
+      // Process with Claude (pass userId and channelId for conversation memory)
+      const response = await this.agent.processMessage(context.text, {
+        userId: context.userId,
+        channelId: context.channelId,
+      });
+
+      // Track response time
+      const durationMs = Date.now() - startTime;
+      this.usageTracker?.recordResponseTime(durationMs);
 
       // Remove typing indicator
       await this.removeReactionSafe(context.channelId, context.messageTs, "eyes");
@@ -226,6 +249,9 @@ export class SlackBot {
       }
     } catch (error) {
       console.error("Error handling message:", error);
+
+      // Track error
+      this.usageTracker?.recordError();
 
       // Remove typing indicator on error
       await this.removeReactionSafe(context.channelId, context.messageTs, "eyes");

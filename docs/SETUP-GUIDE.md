@@ -129,6 +129,97 @@ npm run build
 npm start
 ```
 
+### Option C: Railway (Recommended for Quick Deploy)
+
+Railway is a free/low-cost platform that handles deployment automatically. Perfect for getting started quickly.
+
+**Prerequisites:** GitHub account, Railway account (free tier available)
+
+#### Step-by-Step Railway Deployment
+
+1. **Fork the Repository**
+   - Go to the GitHub repository
+   - Click "Fork" to create your own copy
+   - This lets Railway track your changes
+
+2. **Create Railway Account**
+   - Go to [railway.app](https://railway.app)
+   - Sign up with GitHub (recommended for easy repo linking)
+   - Free tier includes $5/month credit (usually enough for this bot)
+
+3. **Create New Project**
+   - Click "New Project"
+   - Select "Deploy from GitHub repo"
+   - Choose your forked repository
+   - Railway will auto-detect the Dockerfile
+
+4. **Add Environment Variables**
+   - In your Railway project, go to "Variables"
+   - Click "Add Variable" or "RAW Editor" for bulk entry
+   - Add all required variables:
+
+   ```
+   # Required
+   ASHBY_API_KEY=your_ashby_api_key
+   ANTHROPIC_API_KEY=your_anthropic_api_key
+   SLACK_BOT_TOKEN=xoxb-your-token
+   SLACK_APP_TOKEN=xapp-your-token
+
+   # Recommended
+   SAFETY_MODE=CONFIRM_ALL
+   BATCH_LIMIT=2
+   STALE_DAYS=14
+   ANTHROPIC_MODEL=claude-sonnet-4-20250514
+   ```
+
+5. **Deploy**
+   - Railway will automatically build and deploy
+   - Watch the build logs for any errors
+   - Once deployed, you'll see "Deployment successful"
+
+6. **Verify It's Running**
+   - Click on "Deployments" to see logs
+   - You should see:
+     ```
+     ========================================
+        Ashby Slack Bot - Starting Up
+     ========================================
+
+     ✅ Configuration: Loaded and validated
+     ✅ Ashby API Key: Configured
+     ✅ Anthropic API Key: Configured
+     ...
+     🚀 Ashby Slack Bot is ready!
+     ```
+
+#### Railway Pricing
+
+- **Free Tier:** $5/month credit (usually covers light usage)
+- **Hobby Plan:** $5/month for guaranteed uptime
+- **Pro Plan:** $20/month for production workloads
+
+The bot runs 24/7 and uses minimal resources, so most teams stay within free tier limits.
+
+#### Railway Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| Build fails | Check Dockerfile exists, verify package.json is valid |
+| Deploy fails | Check environment variables are set correctly |
+| Bot doesn't respond | Check logs for startup errors, verify Slack tokens |
+| Restarts frequently | Check for unhandled errors in logs |
+
+#### Updating Your Deployment
+
+Railway auto-deploys when you push to your main branch:
+
+```bash
+git add .
+git commit -m "Update configuration"
+git push origin main
+# Railway auto-deploys in ~2 minutes
+```
+
 ---
 
 ## Step 3: Configure Environment

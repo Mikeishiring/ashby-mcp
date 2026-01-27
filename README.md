@@ -42,10 +42,12 @@ An AI-powered recruiting assistant that lives in Slack and connects to your Ashb
 
 **Quick setup overview:**
 1. Get API keys (Ashby, Anthropic, Slack)
-2. Install via Docker or Node.js
+2. Deploy via Railway (easiest), Docker, or Node.js
 3. Configure environment variables
 4. Invite bot to Slack channel
 5. Done! (~15 minutes)
+
+**Fastest path:** Deploy to [Railway](https://railway.app) with one click - see [Setup Guide](docs/SETUP-GUIDE.md#option-c-railway-recommended-for-quick-deploy)
 
 ---
 
@@ -213,22 +215,40 @@ React with ✅ to confirm"
 
 ## Safety & Confirmations
 
-The bot is designed with safety in mind:
+The bot is designed with safety in mind. These rules are **always enforced** and cannot be bypassed:
 
-✅ **All write operations require confirmation**
-- You'll see exactly what will change
-- React with ✅ to proceed
-- No changes happen until you confirm
+### Core Safety Rules
 
-🔒 **Privacy protection**
-- Hired candidates are off-limits
-- You see the same data you can see in Ashby
-- All notes are auto-tagged `[via Slack Bot]`
+| Rule | Description | Configurable? |
+|------|-------------|---------------|
+| **Confirmation Required** | All write operations (move, reject, add note, schedule) require ✅ reaction | No - always on |
+| **Hired Candidates Protected** | Hired candidates are hidden and cannot be modified | No - always on |
+| **Batch Limit** | Max candidates per bulk action (default: 2) | Yes - `BATCH_LIMIT` |
+| **Confirmation Timeout** | Time to confirm before action expires (default: 30 min) | Yes - `CONFIRMATION_TIMEOUT_MS` |
+| **Auto-Tagged Notes** | All notes include `[via Slack Bot]` for audit trail | No - always on |
 
-⚖️ **Batch limits**
-- Max 2 candidates moved at once (configurable)
-- Prevents accidental bulk changes
-- Easy to override if needed
+### How Confirmations Work
+
+```
+User: "Move John to Technical Interview"
+Bot: "I'll move John Doe to Technical Interview stage.
+      React with ✅ to confirm or ❌ to cancel."
+
+[User reacts ✅]
+
+Bot: "✅ Done! John Doe moved to Technical Interview."
+```
+
+- ✅ = Proceed with action
+- ❌ = Cancel action
+- No reaction within timeout = Action cancelled automatically
+
+### Privacy Protection
+
+- **Hired candidates**: Completely hidden from all searches and queries
+- **Data access**: Bot only sees what your Ashby API key has access to
+- **No data storage**: All data fetched in real-time, nothing stored locally
+- **Audit trail**: All bot actions tagged for traceability
 
 ---
 
@@ -244,7 +264,7 @@ Slack → Claude AI (Anthropic) → Ashby API → Your ATS
 - **AI:** Claude Sonnet 4 (Anthropic)
 - **Communication:** Slack Socket Mode
 - **API:** Ashby REST API
-- **Deployment:** Docker/Node.js
+- **Deployment:** Railway (recommended), Docker, or Node.js
 
 ### Requirements
 - Ashby API key (with permissions)
@@ -288,6 +308,14 @@ ashby-mcp/
 
 ## Quick Start for Admins
 
+### Option 1: Railway (Fastest)
+1. Fork this repo on GitHub
+2. Sign up at [railway.app](https://railway.app) with GitHub
+3. Create new project → Deploy from GitHub repo
+4. Add environment variables (see below)
+5. Done! Railway auto-builds and deploys
+
+### Option 2: Local/Docker
 ```bash
 # 1. Clone the repository
 git clone https://github.com/your-org/ashby-slack-bot.git
@@ -312,35 +340,45 @@ npm start
 ## Environment Variables
 
 ```bash
-# Required
+# ========================================
+# REQUIRED - Bot won't start without these
+# ========================================
 ASHBY_API_KEY=your_ashby_key_here
 ANTHROPIC_API_KEY=your_anthropic_key_here
 SLACK_BOT_TOKEN=xoxb-your-slack-token-here
 SLACK_APP_TOKEN=xapp-your-app-token-here
 
-# Optional - Customize behavior
-SLACK_SIGNING_SECRET=your-signing-secret
-ASHBY_BASE_URL=https://api.ashbyhq.com
+# ========================================
+# OPTIONAL - Customize behavior
+# ========================================
+
+# AI Model (claude-sonnet-4-20250514 recommended)
 ANTHROPIC_MODEL=claude-sonnet-4-20250514
 ANTHROPIC_MAX_TOKENS=4096
 
-SAFETY_MODE=CONFIRM_ALL
-BATCH_LIMIT=2
-CONFIRMATION_TIMEOUT_MS=300000
+# Safety Settings
+SAFETY_MODE=CONFIRM_ALL          # CONFIRM_ALL or BATCH_ONLY
+BATCH_LIMIT=2                    # Max candidates per batch action
+CONFIRMATION_TIMEOUT_MS=1800000  # 30 minutes (use 86400000 for 24hr)
+STALE_DAYS=14                    # Days before candidate is "stale"
 
+# Daily Summary (pipeline overview every morning)
 DAILY_SUMMARY_ENABLED=true
 DAILY_SUMMARY_TIME=09:00
 DAILY_SUMMARY_TIMEZONE=America/New_York
 DAILY_SUMMARY_CHANNEL=C0123456789
 
+# Pipeline Alerts (stale candidate warnings)
 PIPELINE_ALERTS_ENABLED=false
 PIPELINE_ALERTS_TIME=09:00
 PIPELINE_ALERTS_TIMEZONE=America/New_York
 PIPELINE_ALERTS_CHANNEL=C0123456789
-PIPELINE_ALERTS_STALE_THRESHOLD=3
-PIPELINE_ALERTS_DECISION_THRESHOLD=2
 
-STALE_DAYS=14
+# Blocker Alerts (proactive candidate status monitoring)
+BLOCKER_ALERTS_ENABLED=false
+BLOCKER_ALERTS_CRON=0 */4 * * *   # Every 4 hours
+BLOCKER_ALERTS_CHANNEL=C0123456789
+BLOCKER_ALERTS_MIN_SEVERITY=warning
 ```
 
 ---
@@ -414,11 +452,13 @@ Cost depends on:
 - Application history
 - Detailed feedback access
 - Custom fields support
+- Conversation memory (4hr context retention)
+- Proactive blocker alerts
+- Usage analytics tracking
+- Railway deployment support
 
 ### Coming Soon 🚀
-- Automated testing suite
 - Performance dashboards
-- Usage analytics
 - Custom workflows
 - Bulk operations
 - Advanced analytics

@@ -7,6 +7,7 @@ import type { Config } from "../config/index.js";
 import type { AshbyService } from "../ashby/service.js";
 import type { SafetyGuards } from "../safety/guards.js";
 import type { ToolExecutor } from "./executor.js";
+import { ConversationMemory } from "../memory/index.js";
 
 // Mock Anthropic SDK with mock messages create function
 const mockMessagesCreate = vi.fn();
@@ -451,6 +452,184 @@ describe("ClaudeAgent", () => {
 
       expect(result.success).toBe(false);
       expect(result.message).toBe("Operation failed.");
+    });
+  });
+
+  describe("memory integration", () => {
+    let memory: ConversationMemory;
+    let agentWithMemory: ClaudeAgent;
+
+    beforeEach(() => {
+      memory = new ConversationMemory();
+      agentWithMemory = new ClaudeAgent(
+        mockConfig,
+        mockAshby as AshbyService,
+        mockSafety as SafetyGuards,
+        mockExecutor as ToolExecutor,
+        memory
+      );
+    });
+
+    it("should record user message in memory when context provided", async () => {
+      mockMessagesCreate.mockResolvedValue({
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "Hi there!" }],
+      });
+
+      await agentWithMemory.processMessage("Hello", {
+        userId: "user-1",
+        channelId: "channel-1",
+      });
+
+      const context = memory.getContext("user-1", "channel-1");
+      expect(context.messages.length).toBe(2); // user + assistant
+      expect(context.messages[0]?.content).toBe("Hello");
+      expect(context.messages[0]?.role).toBe("user");
+    });
+
+    it("should record assistant response in memory when context provided", async () => {
+      mockMessagesCreate.mockResolvedValue({
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "Hi there!" }],
+      });
+
+      await agentWithMemory.processMessage("Hello", {
+        userId: "user-1",
+        channelId: "channel-1",
+      });
+
+      const context = memory.getContext("user-1", "channel-1");
+      expect(context.messages[1]?.content).toBe("Hi there!");
+      expect(context.messages[1]?.role).toBe("assistant");
+    });
+
+    it("should record candidate context from search results", async () => {
+      mockMessagesCreate
+        .mockResolvedValueOnce({
+          stop_reason: "tool_use",
+          content: [
+            {
+              type: "tool_use",
+              id: "tool-1",
+              name: "search_candidates",
+              input: { query: "John" },
+            },
+          ],
+        })
+        .mockResolvedValueOnce({
+          stop_reason: "end_turn",
+          content: [{ type: "text", text: "Found John Doe" }],
+        });
+
+      vi.mocked(mockExecutor.execute!).mockResolvedValue({
+        success: true,
+        data: [
+          { id: "c-123", name: "John Doe", primaryEmailAddress: { value: "john@example.com" } },
+        ],
+      });
+
+      await agentWithMemory.processMessage("Find John", {
+        userId: "user-1",
+        channelId: "channel-1",
+      });
+
+      const context = memory.getContext("user-1", "channel-1");
+      expect(context.candidates.has("c-123")).toBe(true);
+      expect(context.candidates.get("c-123")?.candidateName).toBe("John Doe");
+    });
+
+    it("should record candidate context with application from briefing", async () => {
+      mockMessagesCreate
+        .mockResolvedValueOnce({
+          stop_reason: "tool_use",
+          content: [
+            {
+              type: "tool_use",
+              id: "tool-1",
+              name: "get_interview_briefing",
+              input: { interviewer_email: "test@example.com" },
+            },
+          ],
+        })
+        .mockResolvedValueOnce({
+          stop_reason: "end_turn",
+          content: [{ type: "text", text: "Here's your briefing" }],
+        });
+
+      vi.mocked(mockExecutor.execute!).mockResolvedValue({
+        success: true,
+        data: {
+          briefing: {
+            candidate: { id: "c-456", name: "Jane Smith" },
+            application: {
+              id: "app-1",
+              candidateId: "c-456",
+              jobId: "job-1",
+              job: { id: "job-1", title: "Engineer" },
+              daysInCurrentStage: 3,
+            },
+          },
+        },
+      });
+
+      await agentWithMemory.processMessage("Who am I interviewing?", {
+        userId: "user-1",
+        channelId: "channel-1",
+      });
+
+      const context = memory.getContext("user-1", "channel-1");
+      expect(context.candidates.has("c-456")).toBe(true);
+      const candidateCtx = context.candidates.get("c-456");
+      expect(candidateCtx?.candidateName).toBe("Jane Smith");
+      expect(candidateCtx?.lastApplication?.jobTitle).toBe("Engineer");
+    });
+
+    it("should inject conversation context into enriched message", async () => {
+      // First, populate some context
+      memory.addUserMessage("user-1", "channel-1", "Hello");
+      memory.addAssistantMessage("user-1", "channel-1", "Hi there!");
+
+      mockMessagesCreate.mockResolvedValue({
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "Following up..." }],
+      });
+
+      await agentWithMemory.processMessage("What was I asking about?", {
+        userId: "user-1",
+        channelId: "channel-1",
+      });
+
+      // Check that the API was called with enriched context
+      expect(mockMessagesCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messages: [
+            expect.objectContaining({
+              role: "user",
+              content: expect.stringContaining("RECENT CONVERSATION"),
+            }),
+          ],
+        })
+      );
+    });
+
+    it("should not use memory when context not provided", async () => {
+      mockMessagesCreate.mockResolvedValue({
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "Hi!" }],
+      });
+
+      await agentWithMemory.processMessage("Hello");
+
+      // Memory should still be empty (no context was passed)
+      expect(memory.getStats().activeContexts).toBe(0);
+    });
+
+    it("should return memory instance via getMemory", () => {
+      expect(agentWithMemory.getMemory()).toBe(memory);
+    });
+
+    it("should return null when no memory configured", () => {
+      expect(agent.getMemory()).toBeNull();
     });
   });
 });

@@ -38,7 +38,7 @@ const configSchema = z.object({
   safety: z.object({
     mode: z.enum(["BATCH_LIMIT", "CONFIRM_ALL"]).default("CONFIRM_ALL"),
     batchLimit: z.number().min(1).max(10).default(2),
-    confirmationTimeoutMs: z.number().default(300000), // 5 minutes
+    confirmationTimeoutMs: z.number().default(1800000), // 30 minutes
   }),
 
   // Daily summary configuration
@@ -62,6 +62,18 @@ const configSchema = z.object({
           needsDecision: z.number().default(2), // Alert if >= N need decisions
         })
         .optional(),
+    })
+    .optional(),
+
+  // Proactive blocker alerts configuration
+  blockerAlerts: z
+    .object({
+      enabled: z.boolean().default(false),
+      cronExpression: z.string().default("0 */4 * * *"), // Every 4 hours
+      channelId: z.string().optional(),
+      minSeverity: z.enum(["info", "warning", "critical"]).default("warning"),
+      notifyHiringManagers: z.boolean().default(false),
+      cooldownHours: z.number().default(8),
     })
     .optional(),
 
@@ -113,6 +125,14 @@ export function loadConfig(): Config {
         stale: parseInt(process.env["PIPELINE_ALERTS_STALE_THRESHOLD"] ?? "3", 10),
         needsDecision: parseInt(process.env["PIPELINE_ALERTS_DECISION_THRESHOLD"] ?? "2", 10),
       },
+    },
+    blockerAlerts: {
+      enabled: process.env["BLOCKER_ALERTS_ENABLED"] === "true",
+      cronExpression: process.env["BLOCKER_ALERTS_CRON"] ?? "0 */4 * * *",
+      channelId: process.env["BLOCKER_ALERTS_CHANNEL"],
+      minSeverity: (process.env["BLOCKER_ALERTS_MIN_SEVERITY"] as "info" | "warning" | "critical") ?? "warning",
+      notifyHiringManagers: process.env["BLOCKER_ALERTS_NOTIFY_HM"] === "true",
+      cooldownHours: parseInt(process.env["BLOCKER_ALERTS_COOLDOWN_HOURS"] ?? "8", 10),
     },
     staleDays: parseInt(process.env["STALE_DAYS"] ?? "14", 10),
   };

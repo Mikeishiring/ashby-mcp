@@ -16,7 +16,119 @@ import { ashbyTools, isWriteTool } from "./tools.js";
 import { ToolExecutor } from "./executor.js";
 import type { AshbyService } from "../ashby/service.js";
 import type { SafetyGuards } from "../safety/guards.js";
-import type { ApplicationWithContext } from "../types/index.js";
+import type { ApplicationWithContext, Candidate, CandidateWithContext } from "../types/index.js";
+import type { ConversationMemory } from "../memory/index.js";
+
+/**
+ * Extract candidate data from tool results for memory recording
+ */
+function extractCandidatesFromToolResult(
+  toolName: string,
+  data: unknown
+): Array<{ candidate: Candidate; application?: ApplicationWithContext }> {
+  const candidates: Array<{ candidate: Candidate; application?: ApplicationWithContext }> = [];
+
+  if (!data || typeof data !== "object") {
+    return candidates;
+  }
+
+  // Helper to check if object looks like a candidate
+  const isCandidate = (obj: unknown): obj is Candidate => {
+    if (!obj || typeof obj !== "object") return false;
+    const c = obj as Record<string, unknown>;
+    return typeof c.id === "string" && typeof c.name === "string";
+  };
+
+  // Helper to check if object looks like an application with context
+  const isApplicationWithContext = (obj: unknown): obj is ApplicationWithContext => {
+    if (!obj || typeof obj !== "object") return false;
+    const a = obj as Record<string, unknown>;
+    return typeof a.id === "string" &&
+      typeof a.candidateId === "string" &&
+      typeof a.job === "object";
+  };
+
+  // Handle different tool result structures
+  switch (toolName) {
+    case "search_candidates":
+    case "get_candidates_for_job": {
+      // Returns array of candidates or {job, candidates}
+      const d = data as { candidates?: unknown[] } | unknown[];
+      const candidateArray = Array.isArray(d) ? d : (d.candidates ?? []);
+      for (const item of candidateArray) {
+        if (isCandidate(item)) {
+          candidates.push({ candidate: item });
+        } else if (isApplicationWithContext(item)) {
+          // ApplicationWithContext has candidate property
+          const app = item as ApplicationWithContext & { candidate?: Candidate };
+          if (app.candidate && isCandidate(app.candidate)) {
+            candidates.push({ candidate: app.candidate, application: item });
+          }
+        }
+      }
+      break;
+    }
+
+    case "get_candidate_details": {
+      // Returns CandidateWithContext
+      const d = data as CandidateWithContext;
+      if (isCandidate(d)) {
+        const app = d.applications?.[0];
+        if (app) {
+          candidates.push({ candidate: d, application: app });
+        } else {
+          candidates.push({ candidate: d });
+        }
+      }
+      break;
+    }
+
+    case "get_recent_applications":
+    case "get_pipeline_overview":
+    case "get_stale_candidates":
+    case "start_triage": {
+      // Returns arrays of ApplicationWithContext
+      const d = data as { candidates?: unknown[] } | unknown[];
+      const items = Array.isArray(d) ? d : (d.candidates ?? []);
+      for (const item of items) {
+        if (isApplicationWithContext(item)) {
+          const app = item as ApplicationWithContext & { candidate?: Candidate };
+          if (app.candidate && isCandidate(app.candidate)) {
+            candidates.push({ candidate: app.candidate, application: item });
+          }
+        }
+      }
+      break;
+    }
+
+    case "get_interview_briefing": {
+      // Returns {briefing: {candidate, application, ...}}
+      const d = data as { briefing?: { candidate?: Candidate; application?: ApplicationWithContext } };
+      if (d.briefing?.candidate && isCandidate(d.briefing.candidate)) {
+        if (d.briefing.application) {
+          candidates.push({
+            candidate: d.briefing.candidate,
+            application: d.briefing.application,
+          });
+        } else {
+          candidates.push({ candidate: d.briefing.candidate });
+        }
+      }
+      break;
+    }
+
+    case "get_candidate_scorecard": {
+      // Returns {candidate, ...}
+      const d = data as { candidate?: Candidate };
+      if (d.candidate && isCandidate(d.candidate)) {
+        candidates.push({ candidate: d.candidate });
+      }
+      break;
+    }
+  }
+
+  return candidates;
+}
 
 /**
  * Maximum characters for a tool result before truncation.
@@ -196,37 +308,66 @@ export class ClaudeAgent {
   private readonly maxTokens: number;
   private readonly executor: ToolExecutor;
   private readonly systemPrompt: string;
+  private readonly memory: ConversationMemory | null;
 
   constructor(
     config: Config,
     ashby: AshbyService,
     safety: SafetyGuards,
-    executor?: ToolExecutor
+    executor?: ToolExecutor,
+    memory?: ConversationMemory
   ) {
     this.client = new Anthropic({ apiKey: config.anthropic.apiKey });
     this.model = config.anthropic.model;
     this.maxTokens = config.anthropic.maxTokens;
     this.executor = executor ?? new ToolExecutor(ashby, safety);
+    this.memory = memory ?? null;
     // Build system prompt with actual batch limit from config
     this.systemPrompt = buildSystemPrompt(config.safety.batchLimit);
   }
 
   /**
    * Process a user message and return a response
+   * @param userMessage The user's message
+   * @param context Optional context for memory (userId, channelId)
    */
-  async processMessage(userMessage: string): Promise<AgentResponse> {
+  async processMessage(
+    userMessage: string,
+    context?: { userId: string; channelId: string }
+  ): Promise<AgentResponse> {
+    // Build the user message with conversation context if available
+    let enrichedMessage = userMessage;
+
+    if (this.memory && context) {
+      const conversationContext = this.memory.buildContextSummary(context.userId, context.channelId);
+      if (conversationContext) {
+        enrichedMessage = `${conversationContext}\n\n---\n\nCURRENT MESSAGE:\n${userMessage}`;
+      }
+
+      // Record the user message in memory
+      this.memory.addUserMessage(context.userId, context.channelId, userMessage);
+    }
+
     const messages: MessageParam[] = [
-      { role: "user", content: userMessage },
+      { role: "user", content: enrichedMessage },
     ];
 
-    return this.runConversation(messages);
+    const response = await this.runConversation(messages, context);
+
+    // Record the assistant response in memory
+    if (this.memory && context) {
+      this.memory.addAssistantMessage(context.userId, context.channelId, response.text);
+    }
+
+    return response;
   }
 
   /**
    * Run a conversation with tool use loop
    */
   private async runConversation(
-    messages: MessageParam[]
+    messages: MessageParam[],
+    context?: { userId: string; channelId: string }
   ): Promise<AgentResponse> {
     const pendingConfirmations: PendingWriteOperation[] = [];
     let triageData: TriageSessionData | null = null;
@@ -300,6 +441,22 @@ export class ClaudeAgent {
                 }),
               });
             } else if (result.success) {
+              // Record candidate context in memory if available
+              if (this.memory && context && result.data) {
+                const extractedCandidates = extractCandidatesFromToolResult(
+                  toolUse.name,
+                  result.data
+                );
+                for (const { candidate, application } of extractedCandidates) {
+                  this.memory.recordCandidateContext(
+                    context.userId,
+                    context.channelId,
+                    candidate,
+                    application
+                  );
+                }
+              }
+
               toolResults.push({
                 type: "tool_result",
                 tool_use_id: toolUse.id,
@@ -357,6 +514,13 @@ export class ClaudeAgent {
       success: false,
       message: result.error ?? "Operation failed.",
     };
+  }
+
+  /**
+   * Get the memory instance (for external candidate context recording)
+   */
+  getMemory(): ConversationMemory | null {
+    return this.memory;
   }
 }
 

@@ -8,16 +8,28 @@
 import type {
   Application,
   ApplicationWithContext,
+  ArchiveReason,
   Candidate,
   CandidateSource,
+  CandidateWithContext,
+  Department,
   FeedbackSubmission,
+  HiringTeamMember,
   Interview,
+  InterviewEvent,
+  InterviewPlan,
   InterviewSchedule,
   InterviewStage,
+  Interviewer,
   Job,
+  JobLocation,
+  JobPosting,
   Note,
   Offer,
+  PipelineSummary,
   Scorecard,
+  Team,
+  TriageSession,
   User,
 } from "../types/index.js";
 
@@ -166,5 +178,107 @@ export const createMockScorecard = (overrides: Partial<Scorecard> = {}): Scoreca
   submissions: [],
   attributeRatings: [],
   interviewerScorecards: [],
+  ...overrides,
+});
+
+// =============================================================================
+// Additional Entity Factories
+// =============================================================================
+
+export const createMockArchiveReason = (overrides: Partial<ArchiveReason> = {}): ArchiveReason => ({
+  id: "reason-1",
+  title: "Not a fit",
+  reasonType: "Rejected",
+  ...overrides,
+});
+
+export const createMockDepartment = (overrides: Partial<Department> = {}): Department => ({
+  id: "dept-1",
+  name: "Engineering",
+  parentId: null,
+  ...overrides,
+});
+
+export const createMockTeam = (overrides: Partial<Team> = {}): Team => ({
+  id: "team-1",
+  name: "Platform",
+  parentId: null,
+  ...overrides,
+});
+
+export const createMockJobLocation = (overrides: Partial<JobLocation> = {}): JobLocation => ({
+  id: "location-1",
+  name: "San Francisco",
+  isRemote: false,
+  city: "San Francisco",
+  region: "California",
+  country: "United States",
+  ...overrides,
+});
+
+export const createMockJobPosting = (overrides: Partial<JobPosting> = {}): JobPosting => ({
+  id: "posting-1",
+  title: "Software Engineer",
+  descriptionHtml: "<p>Job description</p>",
+  descriptionPlain: "Job description",
+  isLive: true,
+  publishedDate: "2024-01-01T00:00:00Z",
+  externalLink: "https://careers.example.com/job/1",
+  ...overrides,
+});
+
+export const createMockHiringTeamMember = (overrides: Partial<HiringTeamMember> = {}): HiringTeamMember => ({
+  userId: "user-1",
+  role: "Hiring Manager",
+  ...overrides,
+});
+
+export const createMockInterviewPlan = (overrides: Partial<InterviewPlan> = {}): InterviewPlan => ({
+  id: "plan-1",
+  interviewStages: [createMockStage()],
+  ...overrides,
+});
+
+export const createMockInterviewEvent = (overrides: Partial<InterviewEvent> = {}): InterviewEvent => ({
+  id: "event-1",
+  startTime: "2024-01-15T10:00:00Z",
+  endTime: "2024-01-15T11:00:00Z",
+  interviewerIds: ["user-1"],
+  ...overrides,
+});
+
+export const createMockInterviewer = (overrides: Partial<Interviewer> = {}): Interviewer => ({
+  userId: "user-1",
+  ...overrides,
+});
+
+export const createMockCandidateWithContext = (
+  overrides: Partial<CandidateWithContext> = {}
+): CandidateWithContext => ({
+  ...createMockCandidate(),
+  applications: [createMockApplicationWithContext()],
+  notes: [createMockNote()],
+  ...overrides,
+});
+
+export const createMockPipelineSummary = (overrides: Partial<PipelineSummary> = {}): PipelineSummary => ({
+  totalCandidates: 10,
+  byStage: [],
+  byJob: [],
+  staleCount: 2,
+  needsDecisionCount: 3,
+  ...overrides,
+});
+
+export const createMockTriageSession = (overrides: Partial<TriageSession> = {}): TriageSession => ({
+  id: "session-1",
+  userId: "user-1",
+  channelId: "channel-1",
+  messageTs: "1234567890.123456",
+  candidates: [],
+  currentIndex: 0,
+  decisions: [],
+  createdAt: new Date(),
+  expiresAt: new Date(Date.now() + 30 * 60 * 1000),
   ...overrides,
 });
